@@ -10,6 +10,7 @@ from html import escape
 from core.ai.workflow import ReviewWorkflow, write_json
 from core.export.outputs import epub_file, pdf, web
 from core.manuscript.docx_reader import read_docx
+from core.manuscript.structure import StructureStore
 from core.master import Master, file_hash
 from core.qa.checks import check, save_report, quality_html
 from core.qa.code_fidelity import check_code_fidelity, check_output_codes
@@ -65,6 +66,9 @@ class Production:
 
     def workflow(self):
         return ReviewWorkflow(self.root, self.master(), self.work)
+
+    def structure(self):
+        return StructureStore(self.work, self.master())
 
     def suggestions(self) -> list[dict]:
         workflow = self.workflow()
@@ -123,7 +127,7 @@ class Production:
         stage("승인 내용 반영 중", 5)
         if file_hash(self.source) != master.source_hash:
             raise RuntimeError("원본 DOCX가 분석 이후 변경됐습니다. 다시 분석해 주세요.")
-        approved = self.workflow().output_master()
+        approved = self.structure().apply(self.workflow().output_master())
         approved.save(self.work / "approved-master.json")
         assets = self.work / "assets"
         base = self._output_base(destination)

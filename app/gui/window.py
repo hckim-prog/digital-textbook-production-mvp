@@ -110,6 +110,12 @@ class MainWindow(QMainWindow):
         self.previous_button = QPushButton("이전 작업 불러오기")
         self.previous_button.clicked.connect(self.load_previous)
         form.addWidget(self.previous_button)
+        self.structure_button = QPushButton("장·절·소단원 구성")
+        self.structure_button.clicked.connect(self.configure_structure)
+        form.addWidget(self.structure_button)
+        self.structure_info = QLabel("목차 구성: 기본 분석 또는 AI 분석 후 구조를 승인할 수 있습니다.")
+        self.structure_info.setWordWrap(True)
+        form.addWidget(self.structure_info)
         layout.addWidget(box)
 
     def _model_step(self, layout):
@@ -374,6 +380,7 @@ class MainWindow(QMainWindow):
         else:
             self.file_info.setText("DOCX 원고를 선택해 주세요.")
         if self.analyzed_path != path:
+            self.structure_info.setText("목차 구성: 원고 준비 후 확인할 수 있습니다.")
             self.analyzed_path = None
             self.analysis_info.setText("원고 준비 중…" if path.is_file() else "DOCX 원고를 선택하면 자동으로 준비합니다.")
             self.last_output_folder = self.last_report = None
@@ -388,6 +395,7 @@ class MainWindow(QMainWindow):
     def update_buttons(self):
         source_ok = Path(self.source_edit.text()).is_file() and self.source_edit.text().lower().endswith(".docx")
         analyzed = source_ok and self.analyzed_path == Path(self.source_edit.text()).resolve()
+        self.structure_button.setEnabled(analyzed and not self.busy)
         self.proofread_button.setEnabled(analyzed and not self.busy)
         self.stop_review_button.setEnabled(self.busy and self.is_reviewing and not self.cancel_review.is_set())
         self.build_button.setEnabled(analyzed and not self.busy)
@@ -425,6 +433,19 @@ class MainWindow(QMainWindow):
             return None
         self.prefs.setValue("source", str(path))
         return Production(self.root, path)
+
+    def configure_structure(self):
+        from app.gui.structure_dialog import StructureDialog
+        job = self.production()
+        if not job:
+            return
+        try:
+            dialog = StructureDialog(job, self.model_boxes["technical_review"].currentData(), self._effort("technical_review"), self)
+            dialog.exec()
+            saved = job.structure().load()
+            self.structure_info.setText("목차 구성: " + (f"{len(saved['nodes'])}개 · " + ("승인됨" if saved["status"] == "approved" else "초안 · 승인 필요") if saved else "미설정"))
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "구조 확인", str(exc))
 
     def run_task(self, label, action, done, progress=None):
         if self.busy:
@@ -507,6 +528,11 @@ class MainWindow(QMainWindow):
 
     def _analysis_done(self, job, master):
         self.analyzed_path = job.source
+        try:
+            structure = job.structure().load()
+            self.structure_info.setText("목차 구성: " + (f"{len(structure['nodes'])}개 · " + ("승인됨" if structure["status"] == "approved" else "초안 · 승인 필요") if structure else "미설정 · 장·절·소단원 구성 버튼을 눌러 시작하세요."))
+        except ValueError:
+            self.structure_info.setText("목차 구성: 원고 정보가 변경되어 다시 분석해야 합니다.")
         counts = {}
         for block in master.blocks:
             counts[block.kind] = counts.get(block.kind, 0) + 1

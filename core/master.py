@@ -22,6 +22,7 @@ class Block:
     rich_cells: list[list[list[dict]]] = field(default_factory=list)
     list_label: str = ""
     warnings: list[str] = field(default_factory=list)
+    outline_level: int | None = None
 
 
 @dataclass
@@ -31,6 +32,7 @@ class Master:
     source_hash: str
     blocks: list[Block]
     assets_dir: str = "assets"
+    outline: list[dict] = field(default_factory=list)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

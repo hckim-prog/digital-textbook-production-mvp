@@ -17,6 +17,7 @@ import pymupdf
 from core.master import Master, file_hash
 from core.manuscript.code_blocks import paragraph_text, scan_code_sources
 from core.manuscript.content import MATH
+from core.manuscript.structure import validate
 
 
 def compact(value):
@@ -44,6 +45,9 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
         checks.append({"format": format_name, "label": label, "passed": bool(passed), "detail": detail})
     add("원본", "원본 파일 보존", original_ok)
     add("원고", "이미지 자산", not missing, f"{len(names)}개")
+    outline = validate(master, master.outline) if master.outline else []
+    if outline:
+        add("원고", "장·절·소단원 관계와 범위", True, f"장 {sum(n['level'] == 1 for n in outline)} · 절 {sum(n['level'] == 2 for n in outline)} · 소단원 {sum(n['level'] == 3 for n in outline)}")
     if source.suffix.lower() == ".docx":
         doc = Document(source)
         source_text = paragraph_text(doc.element.body)
@@ -91,6 +95,21 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
                     tree = html.fromstring(files["EPUB/chapter.xhtml"])
                     read_asset = lambda name: files["EPUB/assets/" + name]
                 sections = tree.xpath("//section[@data-source-id]")
+                if outline:
+                    headings = tree.xpath("//*[@data-outline-id]")
+                    expected_outline = [(n["id"], f'h{n["level"]}', n["title"]) for n in outline]
+                    # Number labels are separately retained in the original source heading.
+                    for heading in headings:
+                        for marker in heading.xpath(".//span[@class='list-label']"):
+                            marker.drop_tree()
+                    actual_outline = [(n.get("data-outline-id"), n.tag, n.text_content()) for n in headings]
+                    add(label, "장·절·소단원 제목과 순서", actual_outline == expected_outline)
+                    toc_links = tree.xpath("//nav[@class='book-toc']//a/@href")
+                    add(label, "목차 연결", toc_links == ['#' + n['id'] for n in outline])
+                    if kind == "epub":
+                        nav = html.fromstring(files["EPUB/nav.xhtml"])
+                        links = nav.xpath("//nav//a/@href")
+                        add(label, "EPUB 탐색 목차", links == ['chapter.xhtml#' + n['id'] for n in outline])
                 add(label, "본문과 순서", [s.get("data-source-id") for s in sections] == [b.id for b in master.blocks])
                 missing_text = []
                 for block, node in zip(master.blocks, sections):
@@ -106,6 +125,8 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
                 add(label, "설명·이미지·캡션 연결", [node.get("data-group", "") for node in sections] == [b.group for b in master.blocks])
             elif kind == "pdf":
                 with pymupdf.open(path) as document:
+                    if outline:
+                        add(label, "장·절·소단원 책갈피", [(n[0], n[1]) for n in document.get_toc()] == [(n['level'], n['title']) for n in outline])
                     text = compact("".join(page.get_textbox(pymupdf.Rect(0, 0, page.rect.width, 800)) for page in document))
                     cursor, missing_text = 0, []
                     for block in master.blocks:

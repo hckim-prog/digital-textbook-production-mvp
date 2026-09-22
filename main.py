@@ -16,6 +16,9 @@ def main():
     if '--verify-review-flow' in sys.argv:
         from app.review_verification import run
         return run(app, root)
+    if '--verify-structure' in sys.argv:
+        from app.structure_verification import run
+        return run(app, root)
     if '--verify-local' in sys.argv:
         from app.verification import run_verification
         return run_verification(app, root)

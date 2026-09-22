@@ -17,6 +17,7 @@ import pymupdf
 
 from core.master import Master
 from core.export.pdf_layout import CodeBlock
+from core.manuscript.structure import validate
 
 CSS = """body{font-family:'Malgun Gothic',sans-serif;max-width:850px;margin:2rem auto;line-height:1.75;padding:0 1rem;color:#202b3a}
 img{max-width:100%;height:auto;display:block;margin:1rem 0}
@@ -24,6 +25,7 @@ pre.code-block,pre.code-output{font-family:Consolas,'Cascadia Code',monospace;wh
 pre code{font-family:inherit;white-space:inherit}table{border-collapse:collapse;width:100%;margin:1rem 0}td{border:1px solid #bcc5d1;padding:.55rem;vertical-align:top}
 .procedure-step{border-left:3px solid #3971a9;padding-left:1rem}.paragraph,.figure-caption{margin:.6rem 0}.figure-caption{color:#4a5b70;font-size:.94em}
 .math-expression{font-family:'Cambria Math',serif;white-space:pre-wrap}.list-label{margin-right:.6em}
+.book-toc{background:#f3f6fb;padding:1rem;margin:1rem 0}.book-toc ol{padding-left:1.5rem}h1,h2,h3{line-height:1.5;scroll-margin-top:1rem}
 """
 
 
@@ -54,8 +56,22 @@ def inline_html(items):
 
 
 def html_body(master: Master):
-    parts = [f"<h1>{escape(master.title)}</h1>"]
+    outline = validate(master, master.outline) if master.outline else []
+    parts = [f"<div class='book-title'>{escape(master.title)}</div>" if outline else f"<h1>{escape(master.title)}</h1>"]
+    if outline:
+        def toc(parent=None):
+            return '<ol>' + ''.join(f'<li><a href="#{n["id"]}">{escape(n["title"])}</a>{toc(n["id"]) if any(c["parent_id"] == n["id"] for c in outline) else ""}</li>' for n in outline if n["parent_id"] == parent) + '</ol>'
+        parts.append('<nav class="book-toc" aria-label="목차"><strong>목차</strong>' + toc() + '</nav>')
+    starts = {}
+    for n in outline:
+        starts.setdefault(n["start_block_id"], []).append(n)
     for b in master.blocks:
+        source_heading = None
+        for n in starts.get(b.id, []):
+            if n["use_source_title"]:
+                source_heading = n
+            else:
+                parts.append(f'<h{n["level"]} id="{n["id"]}" data-outline-id="{n["id"]}">{escape(n["title"])}</h{n["level"]}>')
         attrs = f'data-source-id="{b.id}" data-kind="{b.kind}" data-group="{escape(b.group)}"'
         content = ""
         if b.kind in ("code-block", "code-output"):
@@ -77,8 +93,9 @@ def html_body(master: Master):
             if not b.inlines:
                 value += inline_html([{"kind": "image", "asset": name} for name in b.assets])
             label = f'<span class="list-label">{escape(b.list_label)}</span>' if b.list_label else ""
-            tag = "h2" if b.kind == "heading" else "div"
-            content = f'<{tag} class="{b.kind}">{label}{value}</{tag}>'
+            tag = f'h{source_heading["level"]}' if source_heading else ("h2" if b.kind == "heading" and not outline else "div")
+            heading_attrs = f' id="{source_heading["id"]}" data-outline-id="{source_heading["id"]}"' if source_heading else ""
+            content = f'<{tag}{heading_attrs} class="{b.kind}">{label}{value}</{tag}>'
         parts.append(f'<section id="{b.id}" {attrs}>{content}</section>')
     return "\n".join(parts)
 
@@ -124,6 +141,16 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
         if hasattr(style, "fontSize"):
             style.leading = max(getattr(style, "leading", 12), style.fontSize * 1.55)
     code_layout = []
+    outline = validate(master, master.outline) if master.outline else []
+    starts = {}
+    for n in outline:
+        starts.setdefault(n["start_block_id"], []).append(n)
+    bookmarks = []
+    class OutlineDocument(SimpleDocTemplate):
+        def afterFlowable(self, flowable):
+            entry = getattr(flowable, "outline_entry", None)
+            if entry:
+                bookmarks.append([entry["level"], entry["title"], self.page])
 
     def picture(name, max_width=480):
         path = source_assets / name
@@ -154,6 +181,14 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
 
     story = [Paragraph(pdf_text(master.title), styles["Title"]), Spacer(1, 14)]
     for b in master.blocks:
+        source_heading = None
+        for n in starts.get(b.id, []):
+            if n["use_source_title"]:
+                source_heading = n
+            else:
+                heading = Paragraph(pdf_text(n["title"]), styles[f'Heading{n["level"]}'])
+                heading.outline_entry = n
+                story.append(heading)
         if b.kind in ("code-block", "code-output"):
             story.append(CodeBlock(b.id, b.text, code_layout, kind=b.kind))
             story.extend(picture(name) for name in b.assets)
@@ -177,17 +212,22 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
             items = list(b.inlines) if b.inlines else [{"kind": "text", "text": b.text}] + [{"kind": "image", "asset": name} for name in b.assets]
             if b.list_label:
                 items.insert(0, {"kind": "text", "text": b.list_label + " "})
-            style = styles["Heading2"] if b.kind == "heading" else styles["BodyText"]
-            story.extend(flow(items, style))
+            style = styles[f'Heading{source_heading["level"]}'] if source_heading else (styles["Heading2"] if b.kind == "heading" and not outline else styles["BodyText"])
+            rendered = flow(items, style)
+            if source_heading and rendered:
+                rendered[0].outline_entry = source_heading
+            story.extend(rendered)
         story.append(Spacer(1, 8))
     out = dest / filename
     def footer(canvas, document):
         canvas.setFont("Malgun", 8)
         canvas.setFillColor(colors.grey)
         canvas.drawRightString(540, 25, str(document.page))
-    SimpleDocTemplate(str(out), pagesize=(595, 842), leftMargin=55, rightMargin=55,
+    OutlineDocument(str(out), pagesize=(595, 842), leftMargin=55, rightMargin=55,
                       topMargin=42, bottomMargin=45).build(story, onFirstPage=footer, onLaterPages=footer)
     document = pymupdf.open(out)
+    if bookmarks:
+        document.set_toc(bookmarks)
     # ReportLab 4.x writes supplementary Unicode mappings as five hex digits.
     # PDF ToUnicode destinations require UTF-16BE surrogate pairs instead.
     for page in document:
@@ -222,6 +262,17 @@ def epub_file(master, source_assets, dest, filename="textbook.epub"):
         if media:
             book.add_item(epub.EpubItem(uid=path.stem, file_name=f"assets/{path.name}", media_type=media, content=path.read_bytes()))
     book.toc, book.spine = (page,), ["nav", page]
+    if master.outline:
+        outline = validate(master, master.outline)
+        def entries(parent=None):
+            result = []
+            for n in outline:
+                if n["parent_id"] == parent:
+                    link = epub.Link("chapter.xhtml#" + n["id"], n["title"], n["id"])
+                    children = entries(n["id"])
+                    result.append((link, children) if children else link)
+            return result
+        book.toc = entries()
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     out = dest / filename

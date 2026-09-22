@@ -100,6 +100,20 @@ def read_docx(source: Path, work_dir: Path, progress=None) -> Master:
         inline = read_inlines(child, doc, assets, saved)
         text = plain_text(inline)
         style = paragraph.style.name if paragraph.style else ""
+        outline_level = None
+        properties = [paragraph._p.pPr]
+        parent_style = paragraph.style
+        seen_styles = set()
+        while parent_style is not None and parent_style.style_id not in seen_styles:
+            seen_styles.add(parent_style.style_id)
+            properties.append(parent_style.element.pPr)
+            parent_style = parent_style.base_style
+        for prop in properties:
+            outline = prop.find(qn("w:outlineLvl")) if prop is not None else None
+            if outline is not None:
+                value = int(outline.get(qn("w:val"), "9"))
+                outline_level = value + 1 if 0 <= value <= 8 else None
+                break
         links = list(dict.fromkeys(i["href"] for i in inline if i["kind"] == "link" and i.get("href")))
         images = [i["asset"] for i in inline if i["kind"] == "image"]
         kind = _kind(text, style)
@@ -115,6 +129,7 @@ def read_docx(source: Path, work_dir: Path, progress=None) -> Master:
             group = blocks[-1].id
         blocks.append(Block(block_id, kind, text, style, number=number, assets=images, links=links, group=group,
                             inlines=inline, list_label=label,
+                            outline_level=outline_level,
                             warnings=([number_warning] if number_warning else []) + (["수식을 선형 표기로 표시합니다. 원본 수식 정보는 보관됩니다."] if any(i["kind"] == "math" for i in inline) else [])))
         if progress:
             progress({"phase": "이미지와 본문 준비 중", "percent": min(95, 10 + int(index / len(doc.element.body) * 85))})
