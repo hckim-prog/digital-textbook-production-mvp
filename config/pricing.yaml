@@ -1,0 +1,9 @@
+# USD per 1 million tokens. 2026-09-17 OpenAI 공식 모델 페이지의 표준 텍스트 단가.
+# 캐시 입력 할인은 현재 보수적으로 반영하지 않습니다.
+models:
+  gpt-5-mini:
+    input_per_million: 0.25
+    output_per_million: 2.00
+  gpt-5.1:
+    input_per_million: 1.25
+    output_per_million: 10.00
