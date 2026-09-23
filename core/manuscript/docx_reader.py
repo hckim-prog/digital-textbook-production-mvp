@@ -82,8 +82,9 @@ def read_docx(source: Path, work_dir: Path, progress=None) -> Master:
                 for ci in range(len(row)):
                     if (index, ri, ci) not in table_code:
                         rows[ri][ci] = plain_text(rich_cells[ri][ci])
-            cell_kinds = [["code-block" if re.search(r"#include|\bint main\s*\(|std::|\bcout\b|\bcin\b", cell)
-                           else "code-output" if "실행 결과" in cell[:15] else "paragraph" for cell in row] for row in rows]
+            # The source scanner is the single authority for code cells. A
+            # mention of cout/std:: inside prose is not itself a code block.
+            cell_kinds = [["code-output" if "실행 결과" in cell[:15] else "paragraph" for cell in row] for row in rows]
             for ri, ci in ((ri, ci) for ri, row in enumerate(rows) for ci, _ in enumerate(row)):
                 if (index, ri, ci) in table_code:
                     cell_kinds[ri][ci] = "code-block"

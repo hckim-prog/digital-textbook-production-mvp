@@ -17,6 +17,10 @@ def run_verification(app, root):
     prefs = audit / 'exe-verification.ini'
     gui.QSettings = lambda *_: QSettings(str(prefs), QSettings.IniFormat)
     window = gui.MainWindow(root)
+    window.depth_existing.setChecked(True)
+    window.quick_mode.setChecked(False)
+    window.quick_ai.setChecked(False)
+    window.detail_toggle.setChecked(True)
     window.show()
     window.source_edit.setText(str(next((root / 'input/chapter-01').glob('*.docx'))))
     state = {'stage': 0, 'started': time.monotonic(), 'api': None}

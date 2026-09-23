@@ -12,21 +12,16 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle, PageBreak
 import pymupdf
 
 from core.master import Master
 from core.export.pdf_layout import CodeBlock
+from core.export.themes import resolve, stylesheet, READER_JS
 from core.manuscript.structure import validate
+from core.cancellation import check_cancelled
 
-CSS = """body{font-family:'Malgun Gothic',sans-serif;max-width:850px;margin:2rem auto;line-height:1.75;padding:0 1rem;color:#202b3a}
-img{max-width:100%;height:auto;display:block;margin:1rem 0}
-pre.code-block,pre.code-output{font-family:Consolas,'Cascadia Code',monospace;white-space:pre;overflow-x:auto;max-width:100%;tab-size:4;line-height:1.55;background:#f3f5f7;padding:1rem}
-pre code{font-family:inherit;white-space:inherit}table{border-collapse:collapse;width:100%;margin:1rem 0}td{border:1px solid #bcc5d1;padding:.55rem;vertical-align:top}
-.procedure-step{border-left:3px solid #3971a9;padding-left:1rem}.paragraph,.figure-caption{margin:.6rem 0}.figure-caption{color:#4a5b70;font-size:.94em}
-.math-expression{font-family:'Cambria Math',serif;white-space:pre-wrap}.list-label{margin-right:.6em}
-.book-toc{background:#f3f6fb;padding:1rem;margin:1rem 0}.book-toc ol{padding-left:1.5rem}h1,h2,h3{line-height:1.5;scroll-margin-top:1rem}
-"""
+
 
 
 def _code_markup(block_id, text, kind="code-block"):
@@ -55,17 +50,25 @@ def inline_html(items):
     return "".join(parts)
 
 
-def html_body(master: Master):
+def html_body(master: Master, reader=False, cancelled=None):
+    check_cancelled(cancelled)
     outline = validate(master, master.outline) if master.outline else []
     parts = [f"<div class='book-title'>{escape(master.title)}</div>" if outline else f"<h1>{escape(master.title)}</h1>"]
+    if reader:
+        parts = [f'<a class="skip-link" href="#book-content">본문으로 이동</a><div class="book-shell"><header class="book-title"><span class="edition">DIGITAL TEXTBOOK</span><div class="cover-title">{escape(master.title)}</div></header>']
     if outline:
         def toc(parent=None):
             return '<ol>' + ''.join(f'<li><a href="#{n["id"]}">{escape(n["title"])}</a>{toc(n["id"]) if any(c["parent_id"] == n["id"] for c in outline) else ""}</li>' for n in outline if n["parent_id"] == parent) + '</ol>'
-        parts.append('<nav class="book-toc" aria-label="목차"><strong>목차</strong>' + toc() + '</nav>')
+        nav = '<nav class="book-toc" aria-label="목차"><strong>목차</strong>' + toc() + '</nav>'
+        parts.append('<aside class="reader-sidebar"><details open><summary>목차</summary>' + nav + '</details></aside>' if reader else nav)
+    if reader:
+        if not outline: parts.append('<aside class="reader-sidebar">목차 정보가 없는 원고입니다.</aside>')
+        parts.append('<main id="book-content" class="book-content">')
     starts = {}
     for n in outline:
         starts.setdefault(n["start_block_id"], []).append(n)
     for b in master.blocks:
+        check_cancelled(cancelled)
         source_heading = None
         for n in starts.get(b.id, []):
             if n["use_source_title"]:
@@ -80,6 +83,7 @@ def html_body(master: Master):
         elif b.kind == "table":
             rows = []
             for ri, row in enumerate(b.rows):
+                check_cancelled(cancelled)
                 cells = []
                 for ci, value in enumerate(row):
                     kind = b.cell_kinds[ri][ci] if ri < len(b.cell_kinds) and ci < len(b.cell_kinds[ri]) else "paragraph"
@@ -87,7 +91,7 @@ def html_body(master: Master):
                     cell = _code_markup(f"{b.id}-r{ri}c{ci}", value, kind) if kind in ("code-block", "code-output") else (inline_html(rich) if rich else escape(value).replace("\n", "<br />"))
                     cells.append(f"<td>{cell}</td>")
                 rows.append("<tr>" + "".join(cells) + "</tr>")
-            content = "<table>" + "".join(rows) + "</table>"
+            content = '<div class="table-wrap"><table>' + "".join(rows) + "</table></div>"
         else:
             value = inline_html(b.inlines) if b.inlines else escape(b.text).replace("\n", "<br />")
             if not b.inlines:
@@ -97,20 +101,24 @@ def html_body(master: Master):
             heading_attrs = f' id="{source_heading["id"]}" data-outline-id="{source_heading["id"]}"' if source_heading else ""
             content = f'<{tag}{heading_attrs} class="{b.kind}">{label}{value}</{tag}>'
         parts.append(f'<section id="{b.id}" {attrs}>{content}</section>')
+    if reader: parts.append("</main></div>")
     return "\n".join(parts)
 
 
-def web(master, source_assets, dest):
+def web(master, source_assets, dest, theme="auto", cancelled=None):
+    check_cancelled(cancelled)
+    design = resolve(master, theme)
     dest.mkdir(parents=True, exist_ok=True)
     if source_assets.is_dir():
         shutil.copytree(source_assets, dest / "assets", dirs_exist_ok=True)
     out = dest / "index.html"
-    out.write_text(f"<!doctype html><html lang='ko'><head><meta charset='utf-8'/><title>{escape(master.title)}</title><style>{CSS}</style></head><body>{html_body(master)}</body></html>", encoding="utf-8", newline="\n")
+    out.write_text(f"<!doctype html><html lang='ko'><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><meta name='book-theme' content='{design['id']}'/><title>{escape(master.title)}</title><style>{stylesheet(design)}</style></head><body>{html_body(master, reader=True, cancelled=cancelled)}<script>{READER_JS}</script></body></html>", encoding="utf-8", newline="\n")
+    check_cancelled(cancelled)
     return out
 
 
 def _pdf_fonts():
-    for name, filename in (("Malgun", "malgun.ttf"), ("CodeMono", "consola.ttf"), ("Symbols", "seguisym.ttf")):
+    for name, filename in (("Malgun", "malgun.ttf"), ("MalgunBold", "malgunbd.ttf"), ("CodeMono", "consola.ttf"), ("Symbols", "seguisym.ttf")):
         path = Path("C:/Windows/Fonts") / filename
         if not path.is_file():
             raise RuntimeError("결과물에 필요한 Windows 글꼴을 찾을 수 없습니다: " + filename)
@@ -132,7 +140,9 @@ def pdf_text(value):
     return "".join(result)
 
 
-def pdf(master, source_assets, dest, filename="textbook.pdf"):
+def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", cancelled=None):
+    check_cancelled(cancelled)
+    design = resolve(master, theme)
     _pdf_fonts()
     dest.mkdir(parents=True, exist_ok=True)
     styles = getSampleStyleSheet()
@@ -140,6 +150,23 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
         style.fontName, style.wordWrap = "Malgun", "CJK"
         if hasattr(style, "fontSize"):
             style.leading = max(getattr(style, "leading", 12), style.fontSize * 1.55)
+    accent = colors.HexColor(design['accent'])
+    tint = colors.HexColor(design['tint'])
+    ink = colors.HexColor(design['ink'])
+    styles['BodyText'].fontSize = design['body']
+    styles['BodyText'].leading = design['leading']
+    styles['BodyText'].textColor = ink
+    styles['Title'].fontName = 'MalgunBold'
+    styles['Title'].fontSize, styles['Title'].leading = 30, 43
+    styles['Title'].alignment = 0
+    styles['Title'].textColor = accent
+    for level,size in [(1,23),(2,16),(3,12),(4,11)]:
+        st=styles[f'Heading{level}'];st.fontName='MalgunBold';st.fontSize=size;st.leading=size*1.5
+        st.textColor=accent if level!=2 else ink
+        st.spaceBefore=20;st.spaceAfter=12
+    styles['Heading1'].borderWidth=1
+    styles['Heading1'].borderColor=accent
+    styles['Heading1'].borderPadding=12
     code_layout = []
     outline = validate(master, master.outline) if master.outline else []
     starts = {}
@@ -147,24 +174,30 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
         starts.setdefault(n["start_block_id"], []).append(n)
     bookmarks = []
     class OutlineDocument(SimpleDocTemplate):
+        def handle_flowable(self, flowables):
+            check_cancelled(cancelled)
+            return super().handle_flowable(flowables)
+
         def afterFlowable(self, flowable):
             entry = getattr(flowable, "outline_entry", None)
             if entry:
                 bookmarks.append([entry["level"], entry["title"], self.page])
 
-    def picture(name, max_width=480):
+    def picture(name, max_width=473):
+        check_cancelled(cancelled)
         path = source_assets / name
         width, height = ImageReader(str(path)).getSize()
         scale = min(max_width / width, 550 / height, 1)
         return Image(str(path), width=width * scale, height=height * scale, hAlign="LEFT")
 
-    def flow(items, style, max_width=480):
+    def flow(items, style, max_width=473):
         output, buffer = [], []
         def flush():
             if buffer:
                 output.append(Paragraph("".join(buffer), style))
                 buffer.clear()
         for item in items:
+            check_cancelled(cancelled)
             if item["kind"] == "image":
                 flush()
                 output.append(picture(item["asset"], max_width))
@@ -179,8 +212,13 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
         flush()
         return output
 
-    story = [Paragraph(pdf_text(master.title), styles["Title"]), Spacer(1, 14)]
+    story = [Spacer(1, 90), Paragraph("DIGITAL TEXTBOOK", styles['Heading3']),
+             Spacer(1, 18), Paragraph(pdf_text(master.title), styles["Title"]),
+             PageBreak()]
     for b in master.blocks:
+        check_cancelled(cancelled)
+        if b is not master.blocks[0] and any(n["level"] == 1 for n in starts.get(b.id, [])):
+            story.append(PageBreak())
         source_heading = None
         for n in starts.get(b.id, []):
             if n["use_source_title"]:
@@ -190,21 +228,23 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
                 heading.outline_entry = n
                 story.append(heading)
         if b.kind in ("code-block", "code-output"):
-            story.append(CodeBlock(b.id, b.text, code_layout, kind=b.kind))
+            story.append(CodeBlock(b.id, b.text, code_layout, kind=b.kind, accent=design["accent"]))
             story.extend(picture(name) for name in b.assets)
         elif b.kind == "table" and b.rows:
             col_count = max(map(len, b.rows))
-            cell_width = 480 / col_count - 14
+            cell_width = 473 / col_count - 14
             cells = []
             for ri, row in enumerate(b.rows):
+                check_cancelled(cancelled)
                 rendered_row = []
                 for ci, value in enumerate(row):
                     kind = b.cell_kinds[ri][ci] if ri < len(b.cell_kinds) and ci < len(b.cell_kinds[ri]) else ""
                     rich = b.rich_cells[ri][ci] if ri < len(b.rich_cells) and ci < len(b.rich_cells[ri]) else [{"kind": "text", "text": value}]
-                    rendered_row.append([CodeBlock(f"{b.id}-r{ri}c{ci}", value, code_layout, kind=kind)] if kind in ("code-block", "code-output") else flow(rich, styles["BodyText"], cell_width))
+                    rendered_row.append([CodeBlock(f"{b.id}-r{ri}c{ci}", value, code_layout, kind=kind, accent=design["accent"])] if kind in ("code-block", "code-output") else flow(rich, styles["BodyText"], cell_width))
                 cells.append(rendered_row)
-            table = Table(cells, colWidths=[480 / col_count] * col_count)
-            table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .4, colors.lightgrey),
+            table = Table(cells, colWidths=[473 / col_count] * col_count, splitInRow=1)
+            table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#cedadd")),
+                                       ("ROWBACKGROUNDS", (0, 0), (-1, -1), [tint, colors.white]),
                                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                        ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
             story.append(table)
@@ -221,10 +261,14 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
     out = dest / filename
     def footer(canvas, document):
         canvas.setFont("Malgun", 8)
-        canvas.setFillColor(colors.grey)
+        canvas.setStrokeColor(accent)
+        canvas.setLineWidth(1)
+        canvas.line(55, 813, 540, 813)
+        canvas.setFillColor(accent)
         canvas.drawRightString(540, 25, str(document.page))
     OutlineDocument(str(out), pagesize=(595, 842), leftMargin=55, rightMargin=55,
-                      topMargin=42, bottomMargin=45).build(story, onFirstPage=footer, onLaterPages=footer)
+                      topMargin=52, bottomMargin=45).build(story, onFirstPage=footer, onLaterPages=footer)
+    check_cancelled(cancelled)
     document = pymupdf.open(out)
     if bookmarks:
         document.set_toc(bookmarks)
@@ -247,17 +291,20 @@ def pdf(master, source_assets, dest, filename="textbook.pdf"):
     return out
 
 
-def epub_file(master, source_assets, dest, filename="textbook.epub"):
+def epub_file(master, source_assets, dest, filename="textbook.epub", theme="auto", cancelled=None):
+    check_cancelled(cancelled)
+    design = resolve(master, theme)
     dest.mkdir(parents=True, exist_ok=True)
     book = epub.EpubBook()
     book.set_identifier(master.source_hash)
     book.set_title(master.title)
     book.set_language("ko")
     page = epub.EpubHtml(title=master.title, file_name="chapter.xhtml", lang="ko")
-    page.content = f"<html xmlns='http://www.w3.org/1999/xhtml'><head><title>{escape(master.title)}</title><link rel='stylesheet' href='style.css' type='text/css'/></head><body>{html_body(master)}</body></html>"
+    page.content = f"<html xmlns='http://www.w3.org/1999/xhtml'><head><title>{escape(master.title)}</title><link rel='stylesheet' href='style.css' type='text/css'/></head><body>{html_body(master, cancelled=cancelled)}</body></html>"
     book.add_item(page)
-    book.add_item(epub.EpubItem(uid="style", file_name="style.css", media_type="text/css", content=CSS.encode()))
+    book.add_item(epub.EpubItem(uid="style", file_name="style.css", media_type="text/css", content=stylesheet(design, web=False).encode()))
     for path in source_assets.glob("*") if source_assets.is_dir() else []:
+        check_cancelled(cancelled)
         media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".svg": "image/svg+xml"}.get(path.suffix.lower())
         if media:
             book.add_item(epub.EpubItem(uid=path.stem, file_name=f"assets/{path.name}", media_type=media, content=path.read_bytes()))
@@ -277,4 +324,5 @@ def epub_file(master, source_assets, dest, filename="textbook.epub"):
     book.add_item(epub.EpubNav())
     out = dest / filename
     epub.write_epub(str(out), book)
+    check_cancelled(cancelled)
     return out

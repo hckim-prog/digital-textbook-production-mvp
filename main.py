@@ -13,6 +13,12 @@ def main():
     root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
     if root.name == "DigitalTextbookMaker" and root.parent.name.startswith("dist") and (root.parent.parent / "config/models.yaml").is_file():
         root = root.parent.parent
+    if '--verify-cancellation' in sys.argv:
+        from app.cancellation_verification import run
+        return run(app, root)
+    if '--verify-publication' in sys.argv:
+        from app.publication_verification import run
+        return run(app, root)
     if '--verify-review-flow' in sys.argv:
         from app.review_verification import run
         return run(app, root)

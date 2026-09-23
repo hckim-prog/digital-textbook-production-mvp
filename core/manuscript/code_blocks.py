@@ -58,7 +58,8 @@ def is_code_paragraph(text: str) -> bool:
 def is_code_cell(text: str) -> bool:
     lines = text.split("\n")
     nonblank = [line for line in lines if line.strip()]
-    return len(nonblank) >= 2 and sum(bool(_CODE_LINE.fullmatch(line)) for line in nonblank) >= 2
+    matches = sum(bool(_CODE_LINE.fullmatch(line)) for line in nonblank)
+    return (len(nonblank) == 1 and matches == 1) or (len(nonblank) >= 2 and matches >= 2)
 
 
 def scan_code_sources(doc) -> list[CodeSource]:
@@ -74,7 +75,10 @@ def scan_code_sources(doc) -> list[CodeSource]:
                 for col_index, cell in enumerate(row.cells):
                     text = cell_text(cell)
                     if is_code_cell(text):
-                        single = len(table.rows) == 1 and len(row.cells) == 1
+                        # Keep one-line examples as table cells, matching existing
+                        # saved masters and review baselines (bNNNNN-r0c0).
+                        multiline = len([line for line in text.split('\n') if line.strip()]) >= 2
+                        single = len(table.rows) == 1 and len(row.cells) == 1 and multiline
                         block_id = f"b{body_index:05d}" if single else f"b{body_index:05d}-r{row_index}c{col_index}"
                         sources.append(CodeSource(block_id, text, body_index, body_index,
                                                   None if single else (row_index, col_index)))

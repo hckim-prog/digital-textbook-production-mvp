@@ -33,7 +33,13 @@ def apply_light_theme(app):
         QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled { background: #edf1f5; color: #738095; }
         QComboBox QAbstractItemView { background: white; color: #243247;
                     selection-background-color: #dbeafe; selection-color: #172e50; }
-        QComboBox::drop-down { border: none; width: 24px; }
+        QComboBox { padding-right: 38px; min-height: 22px; }
+        QComboBox:hover { border-color: #94a8c5; }
+        QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right;
+                    width: 32px; border-left: 1px solid #c5cfdd;
+                    border-top-right-radius: 4px; border-bottom-right-radius: 4px; background: #eef2f7; }
+        QComboBox::drop-down:hover { background: #dbeafe; }
+        QComboBox::down-arrow { image: url("__CHEVRON__"); width: 12px; height: 12px; }
         QCheckBox { spacing: 6px; }
         QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #94a3b8;
                     border-radius: 3px; background: white; }
@@ -57,4 +63,6 @@ def apply_light_theme(app):
         QProgressBar::chunk { background: #93b9fa; border-radius: 5px; }
         QToolTip { background: white; color: #243247; border: 1px solid #c5cfdd; padding: 5px; }
     '''
-    app.setStyleSheet(stylesheet.replace('__CHECK__', (Path(__file__).parent / 'assets/check.svg').as_posix()))
+    assets = Path(__file__).parent / 'assets'
+    app.setStyleSheet(stylesheet.replace('__CHECK__', (assets / 'check.svg').as_posix())
+                     .replace('__CHEVRON__', (assets / 'chevron-down.svg').as_posix()))

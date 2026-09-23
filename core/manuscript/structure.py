@@ -10,7 +10,7 @@ import re
 from core.ai.service import editable, _response, record
 from core.ai.workflow import write_json
 
-LEVELS = {1: "장", 2: "절", 3: "소단원"}
+LEVELS = {1: "Chapter", 2: "Section", 3: "Subsection", 4: "Topic"}
 SPECIAL = re.compile(r"^(?:[💡※★]\s*)?(?:학습\s*목표|연습\s*문제|장\s*요약|요약|팁|참고|그림|표\s*\d|방법\s*[A-Z])")
 
 
@@ -52,7 +52,7 @@ def validate(master, nodes):
         while stack and stack[-1]["level"] >= level:
             stack.pop()
         if level > 1 and (not stack or stack[-1]["level"] != level - 1):
-            raise ValueError("장 → 절 → 소단원 순서로 상위 항목을 먼저 지정하세요.")
+            raise ValueError("Chapter → Section → Subsection → Topic 순서로 상위 항목을 먼저 지정하세요.")
         item = {"id": f"outline-{len(result)+1:04d}", "level": level, "title": title,
                 "start_block_id": start, "use_source_title": source_title,
                 "parent_id": stack[-1]["id"] if stack else None,
@@ -86,14 +86,16 @@ def propose_rules(master):
         level, evidence = None, ""
         if re.match(r"^(?:chapter\s*\d+|제?\s*\d+\s*장)(?:\b|\s|[.:])", text, re.I):
             level, evidence = 1, "장 번호"
+        elif re.match(r"^\d+\.\d+\.\d+\.\d+[.\s]", text):
+            level, evidence = 4, "네 단계 번호"
         elif re.match(r"^\d+\.\d+\.\d+[.\s]", text):
             level, evidence = 3, "세 단계 번호"
         elif re.match(r"^\d+\.\d+[.\s]", text):
             level, evidence = 2, "두 단계 번호"
-        elif block.outline_level in (1, 2, 3):
+        elif block.outline_level in (1, 2, 3, 4):
             level, evidence = block.outline_level, "Word 개요 수준 (검토 필요)"
-        elif re.match(r"^(?:heading|제목)\s*[123]$", block.style, re.I):
-            level = int(re.search(r"[123]$", block.style)[0])
+        elif re.match(r"^(?:heading|제목)\s*[1234]$", block.style, re.I):
+            level = int(re.search(r"[1234]$", block.style)[0])
             evidence = "Word 제목 스타일 (검토 필요)"
         if level is None:
             continue

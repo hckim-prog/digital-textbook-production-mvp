@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QThread, Signal
+from core.cancellation import OperationCancelled
 
 
 class TaskThread(QThread):
     completed = Signal(object)
     failed = Signal(str)
     progress = Signal(object)
+    cancelled = Signal(str)
 
     def __init__(self, action, with_progress=False):
         super().__init__()
@@ -17,15 +19,18 @@ class TaskThread(QThread):
         try:
             result = self.action(self.progress.emit) if self.with_progress else self.action()
             self.completed.emit(result)
+        except OperationCancelled as exc:
+            self.cancelled.emit(str(exc))
         except Exception as exc:
             from core.ai.service import friendly_error
             self.failed.emit(friendly_error(exc))
 
 
-def start(action, completed, failed, progress=None):
+def start(action, completed, failed, progress=None, cancelled=None):
     thread = TaskThread(action, with_progress=progress is not None)
     thread.completed.connect(completed)
     thread.failed.connect(failed)
+    thread.cancelled.connect(cancelled or failed)
     if progress is not None:
         thread.progress.connect(progress)
     thread.start()

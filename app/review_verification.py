@@ -25,7 +25,11 @@ def run(app, root):
     doc.save(source)
     gui.QSettings = lambda *_: QSettings(str(sandbox / 'prefs.ini'), QSettings.IniFormat)
     win = gui.MainWindow(sandbox)
+    win.depth_existing.setChecked(True)
     win.setWindowTitle('검토 흐름 검증 · 테스트 응답 사용')
+    win.quick_mode.setChecked(False)
+    win.quick_ai.setChecked(False)
+    win.detail_toggle.setChecked(True)
     win.show()
     state = {'stage': 0}
     report = {'frozen': bool(getattr(sys, 'frozen', False)), 'executable': sys.executable,

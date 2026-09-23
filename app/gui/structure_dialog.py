@@ -3,7 +3,8 @@ from __future__ import annotations
 import copy
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel,
+from app.gui.controls import ClickComboBox
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPushButton, QSplitter, QTextEdit,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from app.workers.task import TaskThread
@@ -30,7 +31,7 @@ class StructureDialog(QDialog):
         basic = QPushButton("기본 분석 (무료)")
         basic.clicked.connect(self.rules)
         controls.addWidget(basic)
-        self.mode = QComboBox()
+        self.mode = ClickComboBox()
         self.mode.addItem("기존 제목 분류", "existing")
         self.mode.addItem("제목 없는 본문에 새 제목도 제안", "create")
         controls.addWidget(self.mode)
@@ -56,11 +57,11 @@ class StructureDialog(QDialog):
         layout.addWidget(split, 1)
         self.editor = QWidget()
         form = QFormLayout(self.editor)
-        self.level = QComboBox()
+        self.level = ClickComboBox()
         for value, label in LEVELS.items():
             self.level.addItem(label, value)
         form.addRow("수준", self.level)
-        self.anchor = QComboBox()
+        self.anchor = ClickComboBox()
         for b in self.master.blocks:
             self.anchor.addItem(f"{b.id} · {b.text[:85] or '[' + b.kind + ']'}", b.id)
         self.anchor.currentIndexChanged.connect(self.anchor_changed)
