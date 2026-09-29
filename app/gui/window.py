@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from app.gui.controls import ClickComboBox
 from app.controllers.production import Production
 from app.workers.task import start
-from core.ai.service import available_models, connection_test, cost, model_config, settings
+from core.ai.service import addable_model_ids, available_models, connection_test, cost, model_config, save_custom_model, settings
 from core.reporting.comparison import compare
 from app.gui.review_display import (
     SEGMENTS_ROLE, STATUS_ROLE, ReviewTextDelegate, StatusDelegate,
@@ -27,7 +27,7 @@ from app.gui.review_display import (
 ROLES = (
     ("proofreading", "교정/교열 모델", "맞춤법과 문장 표현을 검토합니다."),
     ("technical_review", "기술 검토 모델", "C++ 내용과 기술 설명을 검토합니다."),
-    ("final_review", "최종 검토 모델", "앞 단계 승인문을 바탕으로 문장 명확성·용어·의미를 다시 검토합니다. 자동 승인이나 코드 실행 검사는 하지 않습니다."),
+    ("final_review", "최종 검토 모델", "자동 출판에서는 수정본을 재검사합니다. 상세 검토에서는 제안을 만들며 사람이 승인합니다. 코드 실행 검사는 하지 않습니다."),
 )
 
 
@@ -164,8 +164,7 @@ class MainWindow(QMainWindow):
             combo.setToolTip(hint)
             combo.setMaxVisibleItems(12)
             for model in enabled:
-                combo.addItem(f"{model.get('tier', '모델')} · {model.get('display_name', model['id'])}", model["id"])
-                combo.setItemData(combo.count() - 1, model["id"] + "\n" + model.get("description", ""), Qt.ToolTipRole)
+                self._append_model_option(combo, model)
             preferred = str(self.prefs.value(role, self.config["defaults"][role]))
             index = combo.findData(preferred)
             if index < 0:
@@ -254,11 +253,14 @@ class MainWindow(QMainWindow):
         self.detail_toggle = QCheckBox("상세 검토 열기 · 단계별 실행 / 승인·거절·보류")
         layout.addWidget(self.detail_toggle)
         self.analysis_panel.hide()
-        box = QGroupBox("상세 교정 결과")
+        box = QGroupBox("상세 교정 결과 · 수동 검토")
         box.hide()
         self.detail_toggle.toggled.connect(self.analysis_panel.setVisible)
         self.detail_toggle.toggled.connect(box.setVisible)
         content = QVBoxLayout(box)
+        detail_note = QLabel('이 표는 수동 검토 기록입니다. 자동 출판의 반영 결과와 되돌리기는 아래 자동 변경 관리에서 확인하세요.')
+        detail_note.setWordWrap(True)
+        content.addWidget(detail_note)
         self.review_filter = ClickComboBox()
         self.review_filter.addItem("현재 단계의 제안", "current")
         self.review_filter.addItem("모든 새 검토 제안", "all")
@@ -304,7 +306,7 @@ class MainWindow(QMainWindow):
             self.review_buttons.append(button)
         content.addLayout(row)
         layout.addWidget(box)
-        production = QGroupBox("③ 빠른 제작")
+        production = QGroupBox("③ 자동 출판")
         p_layout = QVBoxLayout(production)
         design_row = QHBoxLayout()
         design_row.addWidget(QLabel("교재 디자인"))
@@ -323,10 +325,10 @@ class MainWindow(QMainWindow):
         self.design_info = QLabel("디자인은 HTML·PDF·EPUB에 함께 적용됩니다. 미리보기는 예시 교재이며, 디자인 적용에는 API 비용이 들지 않습니다.")
         self.design_info.setWordWrap(True)
         p_layout.addWidget(self.design_info)
-        self.quick_mode = QCheckBox("빠른 제작 · 제한 교정만 자동 적용하고 나머지는 기존 원문 유지")
+        self.quick_mode = QCheckBox("자동 출판 · 교정·기술 검토·재검사를 거쳐 수정본 제작")
         self.quick_mode.setChecked(True)
         p_layout.addWidget(self.quick_mode)
-        self.quick_ai = QCheckBox("제작 전 AI 교정 1회 · 선택한 교정/교열 모델 사용 (API 비용 발생)")
+        self.quick_ai = QCheckBox("AI 자동 수정 실행 · 선택한 세 모델 사용 (추가 API 비용 발생)")
         self.quick_ai.setChecked(True)
         self.quick_mode.toggled.connect(self.quick_ai.setEnabled)
         p_layout.addWidget(self.quick_ai)
@@ -334,7 +336,7 @@ class MainWindow(QMainWindow):
         self.allow_restructure.setToolTip("원문·코드·그림은 보존하고 새 제목만 추가합니다. 구조 검사 실패 시 교정 전에 멈춥니다. 현재 AI 구조 분석은 입력 60,000자까지 지원합니다.")
         p_layout.addWidget(self.allow_restructure)
         self.quick_mode.toggled.connect(self.allow_restructure.setEnabled)
-        note = QLabel("자동 적용: 등록된 오탈자·띄어쓰기 규칙과 정확히 일치하는 제안만 적용합니다.\n표현·기술 변경은 미적용하며, 기존 승인 기록은 유지합니다. 자동 교정을 끄고 재제작하면 되돌릴 수 있습니다.")
+        note = QLabel("문장 교정과 근거가 확인된 기술 수정은 재검사 후 자동 반영합니다. 불확실한 수정은 반영하지 않고 따로 알립니다.\n코드·수치·표·문제와 기존 승인·거절·보류 기록은 보호합니다. AI 자동 수정을 끄면 기존 승인본으로 제작합니다.")
         note.setWordWrap(True)
         p_layout.addWidget(note)
         folder_row = QHBoxLayout()
@@ -360,7 +362,7 @@ class MainWindow(QMainWindow):
             format_row.addWidget(item)
         format_row.addStretch()
         p_layout.addLayout(format_row)
-        self.build_button = QPushButton("빠른 제작 시작")
+        self.build_button = QPushButton("자동 출판 시작")
         self.build_button.setProperty('primary', True)
         self.build_button.clicked.connect(self.build)
         self.quick_mode.toggled.connect(lambda _: self.update_buttons())
@@ -369,7 +371,7 @@ class MainWindow(QMainWindow):
         self.quick_stop.setToolTip("새 API 요청을 멈춥니다. 이미 보낸 요청은 응답을 받아 저장한 뒤 중단하며, 파일 생성은 안전한 지점에서 중단합니다.")
         self.quick_stop.clicked.connect(self.stop_review)
         p_layout.addWidget(self.quick_stop)
-        self.changes_button = QPushButton("자동 변경 내용 보기")
+        self.changes_button = QPushButton("자동 변경 관리 · 내역 보기 / 되돌리기")
         self.changes_button.clicked.connect(self.show_quick_changes)
         self.changes_button.setEnabled(False)
         p_layout.addWidget(self.changes_button)
@@ -396,7 +398,8 @@ class MainWindow(QMainWindow):
         self.tool_buttons = []
         for label, callback in (
             ("API 연결 확인", self.api_test),
-            ("사용 가능한 AI 모델 확인", self.check_models),
+            ("등록 모델 API 사용 가능 확인", self.check_models),
+            ("API 모델 검색·추가", self.add_model),
             ("AI 모델 비교", self.compare_models),
             ("이전 모델 비교 검토", self.review_comparison),
         ):
@@ -419,6 +422,11 @@ class MainWindow(QMainWindow):
             self._update_reasoning()
         if hasattr(self, "scope_info"):
             self.update_scope()
+
+    @staticmethod
+    def _append_model_option(combo, model):
+        combo.addItem(f"{model.get('tier', '모델')} · {model.get('display_name', model['id'])}", model["id"])
+        combo.setItemData(combo.count() - 1, model["id"] + "\n" + model.get("description", ""), Qt.ToolTipRole)
 
     def _update_reasoning(self):
         role = self.reasoning_role.currentData()
@@ -482,7 +490,7 @@ class MainWindow(QMainWindow):
         self.proofread_button.setEnabled(analyzed and not self.busy)
         self.stop_review_button.setEnabled(self.busy and self.is_reviewing and not self.cancel_review.is_set())
         self.build_button.setEnabled(analyzed and not self.busy)
-        self.build_button.setText("이어서 제작" if self.resume_build else ("빠른 제작 시작" if self.quick_mode.isChecked() else "기존 승인본 제작 · 자동 교정 제외"))
+        self.build_button.setText("이어서 제작" if self.resume_build else ("자동 출판 시작" if self.quick_mode.isChecked() else "기존 승인본 제작 · 자동 교정 제외"))
         self.design_theme.setEnabled(not self.busy)
         self.depth_ai.setEnabled(not self.busy)
         self.depth_existing.setEnabled(not self.busy)
@@ -511,7 +519,7 @@ class MainWindow(QMainWindow):
         self.open_output_button.setEnabled(bool(self.last_output_folder and self.last_output_folder.is_dir()) and not self.busy)
         self.qa_button.setEnabled(bool(self.last_report and self.last_report.is_file()) and not self.busy)
         self.previous_button.setEnabled(not self.busy)
-        self.tool_buttons[2].setEnabled(analyzed and not self.busy)
+        self.tool_buttons[3].setEnabled(analyzed and not self.busy)
         self.advanced.setEnabled(not self.busy)
         for box in self.format_boxes.values():
             box.setEnabled(not self.busy)
@@ -602,8 +610,76 @@ class MainWindow(QMainWindow):
         role = ROLES[labels.index(chosen)][0]
         model = self.model_boxes[role].currentData()
         reasoning = self._effort(role)
-        self.run_task("선택한 모델의 실제 API 응답 확인 중", lambda: connection_test(self.root, model, reasoning),
-                      lambda info: self.status.setText(f"API 응답 확인 완료 · {info['model']} · {info['elapsed_seconds']}초 · {info['input_tokens'] + info['output_tokens']} tokens · 비용 USD {cost(self.root, info) or 0:.6f}"))
+        def finished(info):
+            amount = cost(self.root, info)
+            price = f"USD {amount:.6f}" if amount is not None else "가격 미설정"
+            self.status.setText(f"API 응답 확인 완료 · {info['model']} · {info['elapsed_seconds']}초 · {info['input_tokens'] + info['output_tokens']} tokens · {price}")
+        self.run_task("선택한 모델의 실제 API 응답 확인 중", lambda: connection_test(self.root, model, reasoning), finished)
+
+    def add_model(self):
+        def lookup():
+            try:
+                return addable_model_ids(self.root), False
+            except Exception:
+                return [], True
+
+        def finished(result):
+            ids, unavailable = result
+            dialog = QDialog(self)
+            dialog.setWindowTitle("AI 모델 추가")
+            layout = QVBoxLayout(dialog)
+            note = QLabel("API 목록은 모델 ID만 제공합니다. Responses API의 JSON 출력과 추론 강도, 가격을 공식 문서에서 확인한 뒤 등록하세요. 가격을 비우면 비용은 '가격 미설정'으로 표시됩니다.")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            if unavailable:
+                layout.addWidget(QLabel("API 목록을 가져오지 못했습니다. 모델 ID를 직접 입력할 수 있습니다."))
+            form = QFormLayout()
+            model_box = ClickComboBox()
+            model_box.setEditable(True)
+            model_box.addItems(ids)
+            model_box.setEditText("")
+            form.addRow("모델 ID", model_box)
+            name_edit = QLineEdit()
+            name_edit.setPlaceholderText("비우면 모델 ID로 표시")
+            form.addRow("표시 이름", name_edit)
+            efforts_edit = QLineEdit("none, low, medium, high, xhigh, max")
+            form.addRow("지원 추론 강도", efforts_edit)
+            input_price = QLineEdit()
+            output_price = QLineEdit()
+            input_price.setPlaceholderText("USD / 100만 입력 토큰 · 선택")
+            output_price.setPlaceholderText("USD / 100만 출력 토큰 · 선택")
+            form.addRow("입력 가격", input_price)
+            form.addRow("출력 가격", output_price)
+            layout.addLayout(form)
+            save_button = QPushButton("선택 목록에 추가")
+            layout.addWidget(save_button)
+
+            def save():
+                try:
+                    if bool(input_price.text().strip()) != bool(output_price.text().strip()):
+                        raise ValueError("가격은 입력·출력 값을 모두 적거나 둘 다 비워 두세요.")
+                    model = {"id": model_box.currentText().strip(),
+                             "display_name": name_edit.text().strip() or model_box.currentText().strip(),
+                             "tier": "사용자 추가", "description": "API 사용 가능 여부와 기능은 별도로 확인하세요.",
+                             "enabled": True, "comparison_default": False,
+                             "reasoning_options": [item.strip() for item in efforts_edit.text().split(",") if item.strip()]}
+                    if input_price.text().strip():
+                        model["input_price_per_million"] = float(input_price.text().strip())
+                        model["output_price_per_million"] = float(output_price.text().strip())
+                    save_custom_model(self.root, model)
+                except (ValueError, OSError) as exc:
+                    QMessageBox.warning(dialog, "모델 추가", str(exc))
+                    return
+                self.config = settings(self.root)
+                for combo in self.model_boxes.values():
+                    self._append_model_option(combo, model)
+                self.status.setText(f"{model['id']} 등록 완료 · 역할별 선택 목록에서 고를 수 있습니다.")
+                dialog.accept()
+
+            save_button.clicked.connect(save)
+            dialog.exec()
+
+        self.run_task("API 모델 목록 확인 중", lookup, finished)
 
     def check_models(self):
         def lookup():
@@ -614,12 +690,12 @@ class MainWindow(QMainWindow):
         def finished(result):
             if result.get("error"):
                 self.status.setText("설정된 모델 목록을 사용합니다")
-                QMessageBox.information(self, "사용 가능한 AI 모델", "AI 모델 목록을 자동 확인할 수 없습니다. 설정된 모델 목록을 사용합니다.")
+                QMessageBox.information(self, "등록 모델 API 사용 가능 확인", "API 모델 목록을 확인할 수 없습니다. 등록된 모델 목록은 그대로 표시합니다.")
                 return
             available = result["available"]
             missing = result["unavailable"]
             self.status.setText(f"설정된 모델 {len(available)}개 사용 가능")
-            QMessageBox.information(self, "사용 가능한 AI 모델", "사용 가능: " + ", ".join(available) +
+            QMessageBox.information(self, "등록 모델 API 사용 가능 확인", "API 목록에서 확인됨: " + ", ".join(available) +
                                     ("\n확인되지 않음: " + ", ".join(missing) if missing else ""))
         self.run_task("설정된 모델의 사용 가능 여부 확인 중", lookup, finished)
 
@@ -873,6 +949,21 @@ class MainWindow(QMainWindow):
         theme = self.design_theme.currentData()
         depth_mode = self.depth_ai.isChecked()
         max_depth = self.max_depth.currentData()
+        automatic_models = {role: (box.currentData(), self._effort(role)) for role, box in self.model_boxes.items()}
+        if run_ai:
+            from core.ai.automatic import plan
+            try:
+                _, eligible, _ = plan(job)
+            except (ValueError, OSError) as exc:
+                QMessageBox.warning(self, '자동 출판 준비 실패', str(exc))
+                return
+            models_text = '\n'.join(label + ': ' + str(automatic_models[role][0]) for role,label,_ in ROLES)
+            if QMessageBox.question(self, '자동 출판 API 비용 안내',
+                f'자동 수정 대상 {len(eligible)}문단 · 최대 {len(eligible)*3}회 요청\n'
+                '교정 → 기술 검토 → 변경 문단 재검사 순서로 실행합니다. 저장된 응답은 재사용합니다.\n'
+                '추가 API 비용이 발생하며, 실제 금액은 원고 길이·모델·응답량에 따라 달라집니다.\n'
+                '선택한 AI 목차 구성 요청은 별도입니다.\n\n'+models_text+'\n\n자동 출판을 시작할까요?') != QMessageBox.Yes:
+                return
         self.is_reviewing = run_ai or allow_restructure or depth_mode
         self.is_building = True
         cancelled = self.cancel_review.is_set
@@ -882,9 +973,10 @@ class MainWindow(QMainWindow):
                 return publish(job, formats, chosen, emit, run_ai=run_ai, model=model, reasoning=reasoning,
                     allow_restructure=allow_restructure, structure_model=structure_model,
                     structure_reasoning=structure_reasoning, cancelled=cancelled, theme=theme,
-                    depth_mode=depth_mode, max_depth=max_depth, quick=quick)
+                    depth_mode=depth_mode, max_depth=max_depth, quick=False,
+                    automatic_models=automatic_models if run_ai else None)
             return job.build(formats, chosen, emit, quick=False, theme=theme, cancelled=cancelled)
-        self.run_task("빠른 제작 준비 중", produce, self._build_done, self._phase_progress)
+        self.run_task("자동 출판 준비 중", produce, self._build_done, self._phase_progress)
 
     def _build_done(self, result):
         self.is_reviewing = False
@@ -903,7 +995,12 @@ class MainWindow(QMainWindow):
             self.result_info.setText(self.result_info.text() + '\n디자인: ' + result['design']['name'])
         if result.get('quick') is not None:
             q = result['quick']
-            self.result_info.setText(self.result_info.text() + f"\n제한 교정 {q['applied_count']}건 적용 · 미검토 제안 {q['retained_count']}건 미적용")
+            if q.get('policy', '').startswith('automatic-publication'):
+                summary = f"기존 승인 {q['manual_approved_count']}문단 유지 · 자동 수정 {q['applied_count']}건 · 확인 필요 {q['retained_count']}건 · 보호/사용자 제외 {q['protected_count']}문단"
+                self.result_info.setText(self.result_info.text() + '\n' + summary)
+                self.status.setText(self.status.text() + ' · ' + summary)
+            else:
+                self.result_info.setText(self.result_info.text() + f"\n제한 교정 {q['applied_count']}건 적용 · 미검토 제안 {q['retained_count']}건 미적용")
         self.changes_button.setEnabled((self.last_output_folder / 'reports/quick-changes.html').is_file())
         self.update_buttons()
 
@@ -939,6 +1036,14 @@ class MainWindow(QMainWindow):
 
     def show_quick_changes(self):
         if self.last_output_folder:
+            from core.ai.workflow import read_json
+            report = read_json(self.last_output_folder / 'reports/quick-changes.json', {})
+            if report.get('policy', '').startswith('automatic-publication'):
+                from app.gui.automatic_changes import show_changes
+                job = self.production()
+                if job:
+                    show_changes(self, job, report, self.last_output_folder)
+                return
             path = self.last_output_folder / 'reports/quick-changes.html'
             if path.is_file():
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
@@ -963,7 +1068,7 @@ class MainWindow(QMainWindow):
                 continue
             box = QCheckBox(f"{model.get('tier', '')} · {model.get('display_name', model['id'])}")
             box.setToolTip(model["id"] + "\n" + model.get("description", ""))
-            box.setChecked(model.get("tier") in ("빠름/저비용", "균형", "정밀"))
+            box.setChecked(model.get("comparison_default", model.get("tier") in ("빠름/저비용", "균형", "정밀")))
             choices.append((box, model))
             layout.addWidget(box)
         go = QPushButton("선택한 모델 비교")

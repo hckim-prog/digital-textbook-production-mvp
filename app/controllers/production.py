@@ -118,10 +118,10 @@ class Production:
                 continue
         raise RuntimeError("새 결과물 폴더 이름을 만들 수 없습니다.")
 
-    def build(self, formats: list[str], destination: Path | None = None, progress=None, quick=False, publication=None, theme="auto", cancelled=None) -> dict:
+    def build(self, formats: list[str], destination: Path | None = None, progress=None, quick=False, publication=None, theme="auto", cancelled=None, automatic_result=None) -> dict:
         self._building_folder = None
         try:
-            return self._build(formats, destination, progress, quick, publication, theme, cancelled)
+            return self._build(formats, destination, progress, quick, publication, theme, cancelled, automatic_result)
         except Exception as exc:
             if self._building_folder:
                 save_report({'status': 'cancelled' if isinstance(exc, OperationCancelled) else 'failed',
@@ -131,7 +131,7 @@ class Production:
         finally:
             self._building_folder = None
 
-    def _build(self, formats, destination, progress, quick, publication, theme, cancelled):
+    def _build(self, formats, destination, progress, quick, publication, theme, cancelled, automatic_result=None):
         def stage(text, percent):
             check_cancelled(cancelled)
             if progress:
@@ -146,7 +146,11 @@ class Production:
             raise RuntimeError("원본 DOCX가 분석 이후 변경됐습니다. 다시 분석해 주세요.")
         approved = self.workflow().output_master()
         quick_report = None
-        if quick:
+        if automatic_result is not None:
+            from core.ai.automatic import verify_result
+            verify_result(approved, *automatic_result)
+            approved, quick_report = automatic_result
+        elif quick:
             from core.ai.quick import quick_master
             approved, quick_report = quick_master(approved, self.workflow().items())
         if publication is not None:
@@ -214,6 +218,9 @@ class Production:
                 f"<p>제한 교정 {quick_report['applied_count']}건 적용 · 미검토 제안 {quick_report['retained_count']}건 미적용</p>"
                 '<p>기존 승인·거절·보류 기록은 유지했습니다. 자동 교정을 끄고 다시 제작하면 이번 자동 수정이 제외됩니다.</p>'
                 '<table><tr><th>기준 문장</th><th>자동 교정</th></tr>' + rows + '</table>', encoding='utf-8')
+            if quick_report.get('policy', '').startswith('automatic-publication'):
+                from core.ai.automatic import changes_html
+                (reports / 'quick-changes.html').write_text(changes_html(quick_report), encoding='utf-8')
         if self.workflow().active:
             save_report(self.workflow().legacy(), reports / "legacy-review-decisions.json")
             self.workflow().baseline().save(reports / "review-baseline.json")

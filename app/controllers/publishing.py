@@ -39,7 +39,7 @@ def preflight(job, use_existing_draft=False):
 
 def publish(job, formats, destination=None, progress=None, *, run_ai=False, model=None, reasoning='none',
             allow_restructure=False, structure_model=None, structure_reasoning='none', cancelled=None, theme="auto",
-            depth_mode=False, max_depth=4, quick=True):
+            depth_mode=False, max_depth=4, quick=True, automatic_models=None):
     from core.export.themes import resolve
     resolve(job.master(), theme)
     emit=progress or (lambda _:None)
@@ -82,7 +82,12 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
         if not report['passed']:
             raise ValueError('AI 구조 검사 미통과 (교정 미실행): '+ '\n'.join(i['block_id']+' '+i['message'] for i in report['issues']))
     stop()
-    if run_ai:
+    automatic_result = None
+    if run_ai and automatic_models is not None:
+        from core.ai.automatic import run
+        automatic_result = run(job, automatic_models, emit, stopped)
+        stop()
+    elif run_ai:
         emit({'phase':'AI 교정 중','percent':15})
         run=job.proofread(model,reasoning,role='proofreading',cancelled=stopped,
             progress=lambda info:emit({'phase':f"AI 교정 {info['done']}/{info['total']} 문단",'percent':15+int(50*info['done']/max(info['total'],1))}))
@@ -90,7 +95,9 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
         if run['failure_count'] or run['unprocessed_count']:
             raise RuntimeError('AI 교정 일부가 실패했습니다. 완료된 제안은 저장했습니다. 재시도하거나 AI 교정을 끄고 제작하세요.')
     stop()
-    result=job.build(formats,destination,progress,quick=quick,publication=report,theme=theme,cancelled=stopped)
+    build_progress = (lambda info: emit({**info, 'percent': 75 + int(info['percent'] * .25)})) if automatic_result else progress
+    result=job.build(formats,destination,build_progress,quick=quick,publication=report,theme=theme,cancelled=stopped,
+                     automatic_result=automatic_result)
     if not result['qa']['passed']:
         raise RuntimeError('출력 보존 검사 미통과. 배포용 완료로 처리하지 않았습니다. 검사 보고서: '+result['report'])
     return result

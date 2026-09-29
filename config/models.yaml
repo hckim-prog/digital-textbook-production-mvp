@@ -1,4 +1,31 @@
 models:
+  - id: gpt-6-astra
+    display_name: GPT-6 Astra
+    tier: 최고 정밀
+    description: 중요한 최종 검토용입니다. API 비용이 높을 수 있습니다.
+    enabled: true
+    comparison_default: false
+    reasoning_options: [low, medium, high, xhigh, max]
+    input_price_per_million: 10.00
+    output_price_per_million: 50.00
+  - id: gpt-6-sol
+    display_name: GPT-6 Sol
+    tier: 균형
+    description: 복잡한 원고와 기술 검토에서 성능과 비용의 균형을 제공합니다.
+    enabled: true
+    comparison_default: false
+    reasoning_options: [none, low, medium, high, xhigh, max]
+    input_price_per_million: 2.00
+    output_price_per_million: 10.00
+  - id: gpt-6-luna
+    display_name: GPT-6 Luna
+    tier: 빠름/저비용
+    description: 반복적인 교정과 대량 작업에 적합한 저비용 모델입니다.
+    enabled: true
+    comparison_default: false
+    reasoning_options: [none, low, medium, high, xhigh, max]
+    input_price_per_million: 0.10
+    output_price_per_million: 0.50
   - id: gpt-5.6-luna
     display_name: GPT-5.6 Luna
     tier: 빠름/저비용
@@ -23,14 +50,6 @@ models:
     reasoning_options: [none, low, medium, high, xhigh, max]
     input_price_per_million: 4.00
     output_price_per_million: 20.00
-  - id: gpt-6-astra
-    display_name: GPT-6 Astra
-    tier: 최고 정밀
-    description: 중요한 최종 검토용입니다. API 비용이 높을 수 있습니다.
-    enabled: true
-    reasoning_options: [low, medium, high, xhigh, max]
-    input_price_per_million: 10.00
-    output_price_per_million: 50.00
   - id: gpt-5-mini
     display_name: GPT-5 Mini
     tier: 이전 모델

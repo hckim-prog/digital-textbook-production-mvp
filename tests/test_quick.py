@@ -64,24 +64,32 @@ def test_export_only_changes_and_undo(tmp_path):
     assert (workflow.folder/'suggestions.json').read_bytes()==decisions
 
 
-def test_quick_gui_runs_only_proofreading_and_builds(tmp_path, monkeypatch):
+def test_automatic_gui_runs_three_stages_and_builds(tmp_path, monkeypatch):
     import shutil
     import time
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import QSettings
     import app.gui.window as gui
-    from core.ai import workflow as engine
+    from core.ai import service
     app=QApplication.instance() or QApplication([])
     root=tmp_path/'project';shutil.copytree(__import__('pathlib').Path(__file__).resolve().parents[1]/'config',root/'config')
     source=tmp_path/'sample.docx';doc=Document();doc.add_paragraph('할수 있다.');doc.save(source)
     prefs=QSettings(str(tmp_path/'prefs.ini'),QSettings.IniFormat)
     monkeypatch.setattr(gui,'QSettings',lambda *_:prefs)
     roles=[]
-    def fake(root,master,model,reasoning,limit,progress,role,cancelled=None):
-        roles.append(role)
-        item=proposal();item['block_id']=master.blocks[0].id;item['model']=model
-        return [item],[dict(success=True,block_id=master.blocks[0].id,input_tokens=1,output_tokens=1)]
-    monkeypatch.setattr(engine,'proofread',fake)
+    def fake(root,model,reasoning,prompt):
+        payload=json.loads(prompt.split('자료:\n',1)[1])
+        if prompt.startswith('독립 검수자'):
+            roles.append('final_review')
+            data={'accept':True,'meaning_preserved':True,'evidence_supported':False,'reason':'검수 완료'}
+        else:
+            roles.append('proofreading' if prompt.startswith('맞춤법') else 'technical_review')
+            data={'text':payload['candidate'].replace('할수','할 수'),'technical_change':False,'evidence':[],'reason':'띄어쓰기'}
+        return data,{'model':model}
+    monkeypatch.setattr(service,'_response',fake)
+    monkeypatch.setattr(service,'record',lambda *args:None)
+    monkeypatch.setattr(gui.QMessageBox,'question',lambda *args:gui.QMessageBox.Yes)
+    monkeypatch.setattr(gui.QMessageBox,'warning',lambda *args:pytest.fail(str(args[-1])))
     win=gui.MainWindow(root)
     win.depth_existing.setChecked(True)
     win.source_edit.setText(str(source));win.prepare_timer.stop()
@@ -95,9 +103,9 @@ def test_quick_gui_runs_only_proofreading_and_builds(tmp_path, monkeypatch):
     deadline=time.monotonic()+15
     while (win.busy or any(t.isRunning() for t in win.threads)) and time.monotonic()<deadline:
         app.processEvents();time.sleep(.01)
-    assert not win.busy and roles==['proofreading']
+    assert not win.busy and roles==['proofreading','technical_review','final_review']
     assert win.last_output_folder and win.changes_button.isEnabled()
     report=json.loads((win.last_output_folder/'reports/quick-changes.json').read_text(encoding='utf-8'))
     assert report['applied_count']==1
-    assert job.workflow().items()[0]['status']=='pending'
+    assert job.workflow().items()==[]
     win.close()

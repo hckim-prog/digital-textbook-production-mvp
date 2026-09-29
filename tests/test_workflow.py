@@ -98,7 +98,8 @@ def test_gui_models_workflow_and_remembered_folder(tmp_path, monkeypatch):
     assert not win.qa_button.isEnabled()
     assert not win.proofread_button.isEnabled()
     assert not win.build_button.isEnabled()
-    assert all(box.count() == 6 for box in win.model_boxes.values())
+    assert all(box.count() == 8 for box in win.model_boxes.values())
+    assert [win.model_boxes["proofreading"].itemData(i) for i in range(3)] == ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
     assert win.model_boxes["proofreading"].currentData() == "gpt-5.6-terra"
     assert win.model_boxes["technical_review"].currentData() == "gpt-5.6-sol"
     assert win.model_boxes["final_review"].currentData() == "gpt-5.6-sol"
@@ -125,3 +126,34 @@ def test_gui_models_workflow_and_remembered_folder(tmp_path, monkeypatch):
     assert second.output_edit.text() == str(destination)
     win.close()
     second.close()
+
+
+def test_gui_adds_discovered_model_without_changing_selection(tmp_path, monkeypatch):
+    import os
+    import shutil
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+    from app.gui.controls import ClickComboBox
+    import app.gui.window as window
+
+    app = QApplication.instance() or QApplication([])
+    root = tmp_path / "project"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "config", root / "config")
+    monkeypatch.setattr(window, "QSettings", lambda *_: QSettings(str(tmp_path / "prefs.ini"), QSettings.IniFormat))
+    monkeypatch.setattr(window, "addable_model_ids", lambda root: ["gpt-7-example"])
+    win = window.MainWindow(root)
+    selected = {role: box.currentData() for role, box in win.model_boxes.items()}
+    monkeypatch.setattr(win, "run_task", lambda label, action, done: done(action()))
+
+    def submit(dialog):
+        dialog.findChild(ClickComboBox).setEditText("gpt-7-example")
+        next(button for button in dialog.findChildren(QPushButton) if button.text() == "선택 목록에 추가").click()
+        return QDialog.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", submit)
+    win.add_model()
+    assert all(box.findData("gpt-7-example") >= 0 for box in win.model_boxes.values())
+    assert {role: box.currentData() for role, box in win.model_boxes.items()} == selected
+    assert (root / "working/custom-models.json").is_file()
+    win.close()

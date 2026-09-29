@@ -18,6 +18,7 @@ from core.master import Master, file_hash
 from core.manuscript.code_blocks import paragraph_text, scan_code_sources
 from core.manuscript.content import MATH
 from core.manuscript.structure import validate
+from core.qa.pdf_tables import read_tables, table_marker
 
 
 def compact(value):
@@ -128,9 +129,22 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
                     if outline:
                         add(label, "장·절·소단원 책갈피", [(n[0], n[1]) for n in document.get_toc()] == [(n['level'], n['title']) for n in outline])
                     text = compact("".join(page.get_textbox(pymupdf.Rect(0, 0, page.rect.width, 800)) for page in document))
+                    table_cells = None
+                    if 'table-layout.json' in document.embfile_names():
+                        table_stream, table_cells = read_tables(document)
+                        text = compact(table_stream)
+                        expected_cells = {(b.id, ri, ci): compact(value)
+                                          for b in master.blocks if b.kind == 'table'
+                                          for ri, row in enumerate(b.rows) for ci, value in enumerate(row)}
+                        actual_cells = {key: compact(value) for key, value in table_cells.items()}
+                        bad_cells = [f'{key[0]}-r{key[1]}c{key[2]}' for key in expected_cells.keys() | actual_cells.keys()
+                                     if expected_cells.get(key) != actual_cells.get(key)]
+                        add(label, '표 셀별 내용·페이지 연결', not bad_cells, ', '.join(sorted(bad_cells)))
                     cursor, missing_text = 0, []
                     for block in master.blocks:
                         expected = compact(block_text(block))
+                        if table_cells is not None and block.kind == 'table' and expected:
+                            expected = table_marker(block.id)
                         if not expected:
                             continue
                         found = text.find(expected, cursor)

@@ -17,6 +17,7 @@ import pymupdf
 
 from core.master import Master
 from core.export.pdf_layout import CodeBlock
+from core.export.pdf_tables import PublicationTable
 from core.export.themes import resolve, stylesheet, READER_JS
 from core.manuscript.structure import validate
 from core.cancellation import check_cancelled
@@ -168,6 +169,7 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
     styles['Heading1'].borderColor=accent
     styles['Heading1'].borderPadding=12
     code_layout = []
+    table_layout = []
     outline = validate(master, master.outline) if master.outline else []
     starts = {}
     for n in outline:
@@ -242,7 +244,10 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
                     rich = b.rich_cells[ri][ci] if ri < len(b.rich_cells) and ci < len(b.rich_cells[ri]) else [{"kind": "text", "text": value}]
                     rendered_row.append([CodeBlock(f"{b.id}-r{ri}c{ci}", value, code_layout, kind=kind, accent=design["accent"])] if kind in ("code-block", "code-output") else flow(rich, styles["BodyText"], cell_width))
                 cells.append(rendered_row)
-            table = Table(cells, colWidths=[473 / col_count] * col_count, splitInRow=1)
+            table = PublicationTable(cells, colWidths=[473 / col_count] * col_count, splitInRow=1)
+            for ri, row_styles in enumerate(table._cellStyles):
+                for ci, cell_style in enumerate(row_styles):
+                    cell_style.source_cell = (b.id, ri, ci)
             table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#cedadd")),
                                        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [tint, colors.white]),
                                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -260,6 +265,7 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
         story.append(Spacer(1, 8))
     out = dest / filename
     def footer(canvas, document):
+        canvas.table_layout = table_layout
         canvas.setFont("Malgun", 8)
         canvas.setStrokeColor(accent)
         canvas.setLineWidth(1)
@@ -286,6 +292,7 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
             if repaired != cmap:
                 document.update_stream(xref, repaired)
     document.embfile_add("code-layout.json", json.dumps(code_layout, ensure_ascii=False).encode("utf-8"))
+    document.embfile_add("table-layout.json", json.dumps(table_layout).encode("utf-8"))
     document.saveIncr()
     document.close()
     return out

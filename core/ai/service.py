@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import math
+import os
 import re
+import tempfile
 import time
 
 import yaml
@@ -22,7 +25,53 @@ def protected_facts_unchanged(source: str, target: str) -> bool:
 
 
 def settings(root: Path) -> dict:
-    return yaml.safe_load((root / "config/models.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((root / "config/models.yaml").read_text(encoding="utf-8"))
+    custom_path = root / "working/custom-models.json"
+    if custom_path.is_file():
+        custom = json.loads(custom_path.read_text(encoding="utf-8"))
+        if not isinstance(custom, list):
+            raise ValueError("사용자 모델 목록 형식이 올바르지 않습니다.")
+        registered = {model["id"] for model in config["models"]}
+        config["models"].extend(model for model in custom if model["id"] not in registered)
+    return config
+
+
+def save_custom_model(root: Path, model: dict) -> None:
+    model_id = model.get("id", "")
+    if not isinstance(model_id, str) or not re.fullmatch(r"gpt-[A-Za-z0-9.-]+", model_id):
+        raise ValueError("GPT 모델 ID를 확인하세요.")
+    allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+    efforts = model.get("reasoning_options")
+    if not isinstance(efforts, list) or not efforts or len(efforts) != len(set(efforts)) or set(efforts) - allowed_efforts:
+        raise ValueError("추론 강도 목록을 확인하세요.")
+    if any(existing["id"] == model_id for existing in settings(root)["models"]):
+        raise ValueError("이미 등록된 모델입니다.")
+    for key in ("input_price_per_million", "output_price_per_million"):
+        if key in model and (not isinstance(model[key], (int, float)) or isinstance(model[key], bool)
+                             or not math.isfinite(model[key]) or model[key] < 0):
+            raise ValueError("가격은 0 이상의 숫자여야 합니다.")
+    path = root / "working/custom-models.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    custom = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+    custom.append(model)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, suffix=".json", delete=False) as out:
+            temp_path = Path(out.name)
+            json.dump(custom, out, ensure_ascii=False, indent=2)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+
+
+def addable_model_ids(root: Path) -> list[str]:
+    """Get unregistered GPT IDs; API model listing does not describe pricing or capabilities."""
+    registered = {model["id"] for model in settings(root)["models"]}
+    other_tasks = ("-audio", "-image", "-realtime", "-transcribe", "-search", "-chat", "-codex", "-tts")
+    return sorted((model.id for model in _client(root).with_options(timeout=10).models.list().data
+                   if re.match(r"gpt-\d", model.id) and model.id not in registered
+                   and not any(tag in model.id for tag in other_tasks)), reverse=True)
 
 
 def model_config(root: Path, model_id: str) -> dict:

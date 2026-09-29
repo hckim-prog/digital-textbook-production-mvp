@@ -36,7 +36,8 @@ def run(app, root):
             entered.set()
             if not release.wait(10):
                 raise RuntimeError('중단 버튼 시험 시간 초과')
-        return {'suggestions': []}, {'model': model, 'input_tokens': 1, 'output_tokens': 1, 'elapsed_seconds': .1}
+        payload = json.loads(prompt.split('자료:\n',1)[1])
+        return {'text':payload['candidate'],'technical_change':False,'evidence':[],'reason':'변경 없음'}, {'model': model, 'input_tokens': 1, 'output_tokens': 1, 'elapsed_seconds': .1}
     service._response = fake_response
     service.record = lambda *args: None
     service.cost = lambda *args: 0
@@ -45,6 +46,7 @@ def run(app, root):
         release.set()
         state['stage'] = -1
     QMessageBox.warning = lambda *args: fail(args[-1])
+    QMessageBox.question = lambda *args: QMessageBox.Yes
     def finish(passed):
         report.update(passed=passed, request_count=len(requests))
         (audit / 'acceptance.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

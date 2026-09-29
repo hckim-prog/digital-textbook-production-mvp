@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 import zipfile
 
 from core.ai.service import approved_master, cost, protected_facts_unchanged, safe_blocks
@@ -62,6 +63,35 @@ def test_cost_missing_price(tmp_path):
     assert cost(tmp_path, {"model": "x", "input_tokens": 10, "output_tokens": 20}) is None
     (tmp_path / "config/pricing.yaml").write_text("models:\n  x:\n    input_per_million: 1\n    output_per_million: 2\n", encoding="utf-8")
     assert cost(tmp_path, {"model": "x", "input_tokens": 10, "output_tokens": 20}) == 0.00005
+
+
+def test_custom_model_is_saved_separately_and_visible(tmp_path, monkeypatch):
+    shutil.copytree(Path(__file__).resolve().parents[1] / "config", tmp_path / "config")
+    original = (tmp_path / "config/models.yaml").read_bytes()
+    custom = {"id": "gpt-7-example", "display_name": "GPT-7 Example", "tier": "사용자 추가",
+              "reasoning_options": ["none", "low"], "enabled": True}
+    service.save_custom_model(tmp_path, custom)
+    assert service.model_config(tmp_path, custom["id"])["reasoning_options"] == ["none", "low"]
+    assert (tmp_path / "config/models.yaml").read_bytes() == original
+    assert cost(tmp_path, {"model": custom["id"], "input_tokens": 10, "output_tokens": 20}) is None
+    with pytest.raises(ValueError, match="이미 등록"):
+        service.save_custom_model(tmp_path, custom)
+
+    class Client:
+        def with_options(self, **options):
+            return self
+
+        @property
+        def models(self):
+            return self
+
+        def list(self):
+            from types import SimpleNamespace
+            return SimpleNamespace(data=[SimpleNamespace(id="gpt-7-example"), SimpleNamespace(id="gpt-8-new"),
+                                         SimpleNamespace(id="gpt-image-2")])
+
+    monkeypatch.setattr(service, "_client", lambda root: Client())
+    assert service.addable_model_ids(tmp_path) == ["gpt-8-new"]
 
 
 def test_connection_test_uses_selected_responses_model(tmp_path, monkeypatch):

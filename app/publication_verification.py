@@ -50,6 +50,33 @@ def run(app, root):
         publishing.propose_ai=lambda root,m,*a,**k:[node(m.blocks[0],1,'장 제목'),node(m.blocks[0],2,'절 제목')]
         ai=publishing.publish(raw,['web','pdf','epub'],allow_restructure=True,structure_model='fixture')
         assert ai['qa']['passed']
+        from core.ai import service, automatic
+        requests=[]
+        def automatic_response(root,model,reasoning,prompt):
+            requests.append(prompt)
+            payload=json.loads(prompt.split('자료:\n',1)[1])
+            if prompt.startswith('독립 검수자'):
+                data={'accept':True,'meaning_preserved':True,'evidence_supported':False,'reason':'고정 검수'}
+            else:
+                data={'text':payload['candidate'].replace('첫 번째 본문입니다.','첫 번째 본문을 살펴봅니다.'),
+                      'technical_change':False,'evidence':[],'reason':'고정 교정'}
+            return data,{'model':model}
+        service._response=automatic_response
+        service.record=lambda *args:None
+        configured=next(m for m in service.settings(sandbox)['models'] if m.get('enabled',True))
+        efforts=configured.get('reasoning_options',configured.get('reasoning',[]))
+        models={role:(configured['id'],efforts[0]) for role in automatic.ROLES}
+        edited=publishing.publish(job,['web','pdf','epub'],run_ai=True,automatic_models=models)
+        assert edited['qa']['passed'] and edited['quick']['applied_count']==1
+        request_count=len(requests)
+        repeated=publishing.publish(job,['web'],run_ai=True,automatic_models=models)
+        assert len(requests)==request_count and repeated['quick']['applied_count']==1
+        from core.ai.workflow import write_json
+        write_json(job.work/'automatic-exclusions.json',[edited['quick']['applied'][0]['block_id']])
+        reverted=publishing.publish(job,['web'],run_ai=True,automatic_models=models)
+        assert reverted['qa']['passed'] and reverted['quick']['applied_count']==0
+        result['automatic_edit_all_formats']=True
+        result['automatic_cache_and_rollback']=True
         result.update(passed=True,ai_opt_in_output=True)
     except Exception as exc:
         result['error']=str(exc)
