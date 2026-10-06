@@ -10,7 +10,7 @@ from core.ai.workflow import read_json, write_json
 from core.cancellation import check_cancelled
 from core.manuscript.preflight import heading_level
 
-POLICY = 'automatic-publication-v1'
+POLICY = 'automatic-publication-v2'
 ROLES = ('proofreading', 'technical_review', 'final_review')
 LABELS = ('교정·교열', '기술 검토', '수정본 재검사')
 PROTECTED_KINDS = {'heading', 'exercise', 'procedure-step', 'figure-caption'}
@@ -54,7 +54,7 @@ def safe_change(source, target):
 
 def _request(job, role, model, reasoning, payload, cancelled):
     policies = {
-        'proofreading': '맞춤법·문법·어색한 표현·중복·용어를 교정하세요. 기술적 사실과 의미는 바꾸지 마세요.',
+        'proofreading': '문장마다 오탈자·잘못된 영문 철자·한영 접합·띄어쓰기·비문·미완성 문장·중복을 검사하세요. 한국어 조사(C++는 등)는 정상 표기입니다. 주변 문맥의 우세한 이다/입니다 문체에 맞추되 기술 용어와 UI 이름을 추측으로 바꾸지 마세요. 문장 완성에 새로운 사실이 필요하면 원문을 유지하세요. 기술적 사실과 의미는 바꾸지 마세요.',
         'technical_review': '제시된 교재 분야의 기술 설명과 논리를 검토하세요. 앞 단계 교정을 검토하고 필요한 기술 수정을 제안하세요. 원고에 있는 명시적 근거만 사용하세요. 근거 부족·상충 시 수정하지 마세요.',
         'final_review': '독립 검수자로 원문과 최종 후보를 대조하세요. 누락·추가·의미 왜곡·부정 반전·문제 의도 변경을 검사하세요. 사실 변경은 원고 근거가 직접 뒷받침하는 경우만 허용하세요. 근거 인용만 있다는 이유로 통과시키지 마세요.',
     }

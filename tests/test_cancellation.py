@@ -88,6 +88,9 @@ def test_quick_stop_button_saves_current_reply_and_resumes(tmp_path, monkeypatch
     monkeypatch.setattr(service, 'record', lambda *args: None)
     monkeypatch.setattr(service, 'cost', lambda *args: .001)
     win = gui.MainWindow(job.root)
+    # This regression isolates the original correction cancellation flow.
+    win.learning_ai.setChecked(False)
+    win.editorial_ai.setChecked(False)
     win.depth_existing.setChecked(True)
     win.source_edit.setText(str(job.source))
     win.prepare_timer.stop()

@@ -39,7 +39,8 @@ def preflight(job, use_existing_draft=False):
 
 def publish(job, formats, destination=None, progress=None, *, run_ai=False, model=None, reasoning='none',
             allow_restructure=False, structure_model=None, structure_reasoning='none', cancelled=None, theme="auto",
-            depth_mode=False, max_depth=4, quick=True, automatic_models=None):
+            depth_mode=False, max_depth=4, quick=True, automatic_models=None,
+            learning=False, editorial_ai=False):
     from core.export.themes import resolve
     resolve(job.master(), theme)
     emit=progress or (lambda _:None)
@@ -49,6 +50,8 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
         check_cancelled(stopped)
     stop()
     if not formats or set(formats)-{'web','pdf','epub'}: raise ValueError('출력 형식을 선택하세요.')
+    if (learning or editorial_ai) and (not run_ai or automatic_models is None):
+        raise ValueError('AI 학습 보완·텍스트 QA에는 자동 수정과 세 역할 모델 선택이 필요합니다.')
     job._output_base(destination)  # Fail invalid destinations before any paid request.
     emit({'phase':'원고 사전 진단 중','percent':2})
     report=preflight(job, use_existing_draft=depth_mode)
@@ -95,9 +98,19 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
         if run['failure_count'] or run['unprocessed_count']:
             raise RuntimeError('AI 교정 일부가 실패했습니다. 완료된 제안은 저장했습니다. 재시도하거나 AI 교정을 끄고 제작하세요.')
     stop()
+    learning_report, editorial_issues = None, None
+    candidate = automatic_result[0] if automatic_result else job.workflow().output_master()
+    if learning:
+        from core.manuscript.learning import generate, apply
+        learning_report = generate(job, candidate, report['nodes'], automatic_models, emit, stopped)
+        candidate = apply(candidate, learning_report)
+    if editorial_ai:
+        from core.qa.editorial import audit
+        editorial_issues = audit(job, candidate, automatic_models['final_review'], stopped, emit)
+    stop()
     build_progress = (lambda info: emit({**info, 'percent': 75 + int(info['percent'] * .25)})) if automatic_result else progress
     result=job.build(formats,destination,build_progress,quick=quick,publication=report,theme=theme,cancelled=stopped,
-                     automatic_result=automatic_result)
+                     automatic_result=automatic_result, learning_report=learning_report, editorial_issues=editorial_issues)
     if not result['qa']['passed']:
         raise RuntimeError('출력 보존 검사 미통과. 배포용 완료로 처리하지 않았습니다. 검사 보고서: '+result['report'])
     return result

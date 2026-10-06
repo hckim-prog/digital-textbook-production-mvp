@@ -24,6 +24,8 @@ def run(app, root):
     doc.save(source)
     gui.QSettings = lambda *_: QSettings(str(sandbox / 'prefs.ini'), QSettings.IniFormat)
     win = gui.MainWindow(sandbox)
+    win.learning_ai.setChecked(False)
+    win.editorial_ai.setChecked(False)
     win.depth_existing.setChecked(True)
     win.setWindowTitle('중단·재개 검증 · 유료 API 호출 없음')
     entered, release = Event(), Event()

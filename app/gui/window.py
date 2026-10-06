@@ -332,11 +332,29 @@ class MainWindow(QMainWindow):
         self.quick_ai.setChecked(True)
         self.quick_mode.toggled.connect(self.quick_ai.setEnabled)
         p_layout.addWidget(self.quick_ai)
+        self.learning_ai = QCheckBox("부족한 절 확인 활동·장말 문제 보완 · 근거 및 정답 검수 후 반영 (API 비용 발생)")
+        self.learning_ai.setChecked(str(self.prefs.value('learning_ai', 'true')).lower() == 'true')
+        self.learning_ai.toggled.connect(lambda value: self.prefs.setValue('learning_ai', value))
+        p_layout.addWidget(self.learning_ai)
+        self.editorial_ai = QCheckBox("교정 후 독립 텍스트 QA · 남은 오탈자·미완성 문장 검사 (API 비용 발생)")
+        self.editorial_ai.setChecked(str(self.prefs.value('editorial_ai', 'true')).lower() == 'true')
+        self.editorial_ai.toggled.connect(lambda value: self.prefs.setValue('editorial_ai', value))
+        p_layout.addWidget(self.editorial_ai)
+        def update_enrichment_options():
+            enabled = self.quick_mode.isChecked() and self.quick_ai.isChecked()
+            self.learning_ai.setEnabled(enabled)
+            self.editorial_ai.setEnabled(enabled)
+        self.quick_mode.toggled.connect(update_enrichment_options)
+        self.quick_ai.toggled.connect(update_enrichment_options)
+        update_enrichment_options()
+        self.editorial_button = QPushButton("텍스트·출판 완결성 검사 보고서")
+        self.editorial_button.clicked.connect(self.show_editorial_report)
+        p_layout.addWidget(self.editorial_button)
         self.allow_restructure = QCheckBox("구조가 불명확하면 AI의 새 제목·목차 재구성 허용 (기술 검토 모델 / API 비용 발생)")
         self.allow_restructure.setToolTip("원문·코드·그림은 보존하고 새 제목만 추가합니다. 구조 검사 실패 시 교정 전에 멈춥니다. 현재 AI 구조 분석은 입력 60,000자까지 지원합니다.")
         p_layout.addWidget(self.allow_restructure)
         self.quick_mode.toggled.connect(self.allow_restructure.setEnabled)
-        note = QLabel("문장 교정과 근거가 확인된 기술 수정은 재검사 후 자동 반영합니다. 불확실한 수정은 반영하지 않고 따로 알립니다.\n코드·수치·표·문제와 기존 승인·거절·보류 기록은 보호합니다. AI 자동 수정을 끄면 기존 승인본으로 제작합니다.")
+        note = QLabel("문장 교정과 원고 근거가 확인된 기술 수정은 재검사 후 반영합니다. 기존 코드·표·그림·검토 기록은 보존합니다.\n학습 보완은 새 문제를 추가하며, 장말의 단독 ‘추후 제공’ 표식만 검수된 문제로 교체합니다. 원본은 유지합니다.\n미완성 표식·확정 텍스트 오류가 남으면 출력을 중단합니다. 공식 문서 대조와 화면 이미지 내용 검증은 별도 확인이 필요합니다.")
         note.setWordWrap(True)
         p_layout.addWidget(note)
         folder_row = QHBoxLayout()
@@ -500,6 +518,9 @@ class MainWindow(QMainWindow):
         self.allow_restructure.setEnabled(not self.busy and self.quick_mode.isChecked())
         self.quick_mode.setEnabled(not self.busy)
         self.quick_ai.setEnabled(not self.busy and self.quick_mode.isChecked())
+        self.learning_ai.setEnabled(not self.busy and self.quick_mode.isChecked() and self.quick_ai.isChecked())
+        self.editorial_ai.setEnabled(not self.busy and self.quick_mode.isChecked() and self.quick_ai.isChecked())
+        self.editorial_button.setEnabled(analyzed and not self.busy)
         self.quick_stop.setEnabled(self.busy and (self.is_reviewing or self.is_building) and not self.cancel_review.is_set())
         self.quick_stop.setText("중단 처리 중…" if self.busy and self.cancel_review.is_set() else "중단 및 저장")
         self.detail_toggle.setEnabled(not self.busy)
@@ -950,6 +971,8 @@ class MainWindow(QMainWindow):
         depth_mode = self.depth_ai.isChecked()
         max_depth = self.max_depth.currentData()
         automatic_models = {role: (box.currentData(), self._effort(role)) for role, box in self.model_boxes.items()}
+        learning = run_ai and self.learning_ai.isChecked()
+        editorial_ai = run_ai and self.editorial_ai.isChecked()
         if run_ai:
             from core.ai.automatic import plan
             try:
@@ -962,7 +985,10 @@ class MainWindow(QMainWindow):
                 f'자동 수정 대상 {len(eligible)}문단 · 최대 {len(eligible)*3}회 요청\n'
                 '교정 → 기술 검토 → 변경 문단 재검사 순서로 실행합니다. 저장된 응답은 재사용합니다.\n'
                 '추가 API 비용이 발생하며, 실제 금액은 원고 길이·모델·응답량에 따라 달라집니다.\n'
-                '선택한 AI 목차 구성 요청은 별도입니다.\n\n'+models_text+'\n\n자동 출판을 시작할까요?') != QMessageBox.Yes:
+                '선택한 AI 목차 구성 요청은 별도입니다.\n'
+                + ('학습 보완: 부족한 절·장마다 생성과 검수 각 1회. 본문·코드를 읽기 전용 근거로 전송합니다.\n' if learning else '')
+                + ('독립 텍스트 QA: 최종 후보 약 16,000자 묶음마다 1회 추가 요청합니다.\n' if editorial_ai else '')
+                + '\n'+models_text+'\n\n자동 출판을 시작할까요?') != QMessageBox.Yes:
                 return
         self.is_reviewing = run_ai or allow_restructure or depth_mode
         self.is_building = True
@@ -974,7 +1000,7 @@ class MainWindow(QMainWindow):
                     allow_restructure=allow_restructure, structure_model=structure_model,
                     structure_reasoning=structure_reasoning, cancelled=cancelled, theme=theme,
                     depth_mode=depth_mode, max_depth=max_depth, quick=False,
-                    automatic_models=automatic_models if run_ai else None)
+                    automatic_models=automatic_models if run_ai else None, learning=learning, editorial_ai=editorial_ai)
             return job.build(formats, chosen, emit, quick=False, theme=theme, cancelled=cancelled)
         self.run_task("자동 출판 준비 중", produce, self._build_done, self._phase_progress)
 
@@ -993,6 +1019,11 @@ class MainWindow(QMainWindow):
         self.result_info.setToolTip("\n".join(lines))
         if result.get('design'):
             self.result_info.setText(self.result_info.text() + '\n디자인: ' + result['design']['name'])
+        if result.get('editorial'):
+            self.result_info.setText(self.result_info.text() + '\n출판 완결성: ' +
+                ('추가 확인 필요' if result['editorial']['status'] == 'REVIEW_REQUIRED' else '자동 검사 통과 · 사람의 최종 승인 별도'))
+        if result.get('learning'):
+            self.result_info.setText(self.result_info.text() + f"\n추가 학습 문제: {result['learning']['question_count']}개 · 정답·해설 포함")
         if result.get('quick') is not None:
             q = result['quick']
             if q.get('policy', '').startswith('automatic-publication'):
@@ -1003,6 +1034,17 @@ class MainWindow(QMainWindow):
                 self.result_info.setText(self.result_info.text() + f"\n제한 교정 {q['applied_count']}건 적용 · 미검토 제안 {q['retained_count']}건 미적용")
         self.changes_button.setEnabled((self.last_output_folder / 'reports/quick-changes.html').is_file())
         self.update_buttons()
+
+    def show_editorial_report(self):
+        job = self.production()
+        if not job:
+            return
+        path = job.work / 'editorial-qa.html'
+        if not path.is_file():
+            from core.qa import editorial
+            path = editorial.save(editorial.report(job.workflow().output_master()), job.work)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(self, '검사 보고서', '보고서 위치: ' + str(path))
 
     def preview_design(self):
         from core.export.preview import create_preview

@@ -118,10 +118,10 @@ class Production:
                 continue
         raise RuntimeError("새 결과물 폴더 이름을 만들 수 없습니다.")
 
-    def build(self, formats: list[str], destination: Path | None = None, progress=None, quick=False, publication=None, theme="auto", cancelled=None, automatic_result=None) -> dict:
+    def build(self, formats: list[str], destination: Path | None = None, progress=None, quick=False, publication=None, theme="auto", cancelled=None, automatic_result=None, learning_report=None, editorial_issues=None) -> dict:
         self._building_folder = None
         try:
-            return self._build(formats, destination, progress, quick, publication, theme, cancelled, automatic_result)
+            return self._build(formats, destination, progress, quick, publication, theme, cancelled, automatic_result, learning_report, editorial_issues)
         except Exception as exc:
             if self._building_folder:
                 save_report({'status': 'cancelled' if isinstance(exc, OperationCancelled) else 'failed',
@@ -131,7 +131,7 @@ class Production:
         finally:
             self._building_folder = None
 
-    def _build(self, formats, destination, progress, quick, publication, theme, cancelled, automatic_result=None):
+    def _build(self, formats, destination, progress, quick, publication, theme, cancelled, automatic_result=None, learning_report=None, editorial_issues=None):
         def stage(text, percent):
             check_cancelled(cancelled)
             if progress:
@@ -160,6 +160,16 @@ class Production:
             approved.outline = validate(approved, publication['nodes'])
         else:
             approved = self.structure().apply(approved)
+        if learning_report is not None:
+            from core.manuscript.learning import apply
+            approved = apply(approved, learning_report)
+        from core.qa import editorial
+        stage('텍스트·출판 완결성 검사 중', 8)
+        editorial_report = editorial.report(approved, editorial_issues, quick_report)
+        editorial_path = editorial.save(editorial_report, self.work)
+        if not editorial_report['passed']:
+            raise ValueError('텍스트·출판 완결성 검사 미통과. 최종 파일을 생성하지 않았습니다. '
+                             + str(editorial_report['error_count']) + '건 · 검사 보고서: ' + str(editorial_path))
         from core.export.themes import resolve
         design = resolve(approved, theme)
         approved.save(self.work / "approved-master.json")
@@ -170,6 +180,9 @@ class Production:
         reports = output / "reports"
         save_report({'status': 'building'}, reports / 'production-state.json')
         outputs = {}
+        editorial.save(editorial_report, reports)
+        if learning_report is not None:
+            save_report(learning_report, reports / 'learning-additions.json')
         save_report({"requested": theme, **design}, reports / "design.json")
         if publication is not None:
             save_report(publication, reports / 'publication-preflight.json')
@@ -204,6 +217,11 @@ class Production:
                                      "label": "코드 문자·들여쓰기·빈 줄·순서", "passed": detail["passed"],
                                      "detail": f"원본 {all_codes['original_count']}개 · " + ", ".join(detail.get("visual_errors", []))})
         report["passed"] = report["passed"] and all_codes["passed"]
+        report['editorial'] = editorial_report
+        report['checks'].append({'format':'출판', 'label':'텍스트·출판 완결성 차단 오류',
+                                 'passed':editorial_report['passed'], 'detail':editorial_report['status']})
+        if editorial_report['status'] == 'REVIEW_REQUIRED':
+            report['warnings'].append('텍스트·출판 완결성 확인 필요: reports/editorial-qa.html (공식 근거·이미지 내용·최종 승인 별도)')
         save_report(report, reports / "qa.json")
         quality_html(report, reports / "QA-report.html", self.source.name, outputs)
         approved.save(reports / "approved-master.json")
@@ -229,9 +247,10 @@ class Production:
         self.output = output
         self.reports = reports
         result = {"outputs": {k: str(v) for k, v in outputs.items()}, "qa": report,
-                  "folder": str(output), "report": str(reports / "QA-report.html"), "quick": quick_report, "design": design}
-        if publication is None or report['passed']:
+                  "folder": str(output), "report": str(reports / "QA-report.html"), "quick": quick_report, "design": design,
+                  "editorial": editorial_report, "learning": learning_report}
+        if report['passed']:
             self.remember(result)
         if progress:
-            progress({"phase": "결과물 제작 완료", "percent": 100})
+            progress({"phase": "결과물 제작 완료" if report['passed'] else "결과물 검사 미통과", "percent": 100})
         return result

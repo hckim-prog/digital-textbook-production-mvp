@@ -83,7 +83,7 @@ def test_automatic_gui_runs_three_stages_and_builds(tmp_path, monkeypatch):
             roles.append('final_review')
             data={'accept':True,'meaning_preserved':True,'evidence_supported':False,'reason':'검수 완료'}
         else:
-            roles.append('proofreading' if prompt.startswith('맞춤법') else 'technical_review')
+            roles.append('proofreading' if prompt.startswith('문장마다') else 'technical_review')
             data={'text':payload['candidate'].replace('할수','할 수'),'technical_change':False,'evidence':[],'reason':'띄어쓰기'}
         return data,{'model':model}
     monkeypatch.setattr(service,'_response',fake)
@@ -91,6 +91,8 @@ def test_automatic_gui_runs_three_stages_and_builds(tmp_path, monkeypatch):
     monkeypatch.setattr(gui.QMessageBox,'question',lambda *args:gui.QMessageBox.Yes)
     monkeypatch.setattr(gui.QMessageBox,'warning',lambda *args:pytest.fail(str(args[-1])))
     win=gui.MainWindow(root)
+    win.learning_ai.setChecked(False)
+    win.editorial_ai.setChecked(False)
     win.depth_existing.setChecked(True)
     win.source_edit.setText(str(source));win.prepare_timer.stop()
     job=Production(root,source);master=job.analyze()
