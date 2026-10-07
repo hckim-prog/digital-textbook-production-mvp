@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 import time
+from threading import Lock
 
 import yaml
 from dotenv import load_dotenv
@@ -18,6 +19,7 @@ from core.master import Block, Master
 PROTECTED = {"code-block", "code-output", "table", "figure", "math-expression"}
 SENSITIVE = re.compile(r"https?://\S+|[A-Za-z]:\\\S+|\b[01]{6,}\b|0x[0-9A-Fa-f]+|[$][^$]+[$]")
 FACT_TOKENS = re.compile(r"\d+(?:[.,]\d+)*|[+*/=<>±∞∑∫√]", re.UNICODE)
+_RECORD_LOCK = Lock()
 
 
 def protected_facts_unchanged(source: str, target: str) -> bool:
@@ -106,7 +108,7 @@ def _client(root: Path) -> OpenAI:
     return OpenAI(max_retries=0, timeout=45)
 
 
-def _response(root: Path, model: str, reasoning: str, prompt: str) -> tuple[dict, dict]:
+def _response(root: Path, model: str, reasoning: str, prompt: str, *, timeout=None) -> tuple[dict, dict]:
     config = model_config(root, model)
     if not config or not config.get("enabled", True):
         raise ValueError("설정 파일에서 선택한 AI 모델을 사용할 수 없습니다.")
@@ -117,7 +119,10 @@ def _response(root: Path, model: str, reasoning: str, prompt: str) -> tuple[dict
     if options:
         args["reasoning"] = {"effort": reasoning}
     start = time.monotonic()
-    response = _client(root).responses.create(**args)
+    client = _client(root)
+    if timeout is not None:
+        client = client.with_options(timeout=timeout)
+    response = client.responses.create(**args)
     data = json.loads(response.output_text)
     usage = response.usage
     info = {"model": model, "response_model": getattr(response, "model", model),
@@ -143,8 +148,9 @@ def record(root: Path, info: dict, stage: str, source: str, chapter: str, succes
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"timestamp": datetime.now(timezone.utc).isoformat(), "source": source, "chapter": chapter,
            "stage": stage, **info, "success": success, "estimated_cost_usd": cost(root, info), "error": error}
-    with path.open("a", encoding="utf-8") as out:
-        out.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with _RECORD_LOCK:
+        with path.open("a", encoding="utf-8") as out:
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def connection_test(root: Path, model: str, reasoning: str = "none") -> dict:

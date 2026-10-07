@@ -32,14 +32,18 @@ def run(app, root):
     requests = []
     report = {'passed': False, 'frozen': bool(getattr(sys, 'frozen', False)), 'api_mode': 'delayed_fixture_no_paid_calls'}
     state = {'stage': 0, 'started': time.monotonic()}
-    def fake_response(root, model, reasoning, prompt):
+    def fake_response(root, model, reasoning, prompt, **options):
         requests.append(prompt)
         if len(requests) == 1:
             entered.set()
             if not release.wait(10):
                 raise RuntimeError('중단 버튼 시험 시간 초과')
         payload = json.loads(prompt.split('자료:\n',1)[1])
-        return {'text':payload['candidate'],'technical_change':False,'evidence':[],'reason':'변경 없음'}, {'model': model, 'input_tokens': 1, 'output_tokens': 1, 'elapsed_seconds': .1}
+        def unchanged(p):
+            return {'text':p['candidate'],'technical_change':False,'evidence':[],'reason':'변경 없음'}
+        data = ({'results':[{'block_id':p['block_id'],'response':unchanged(p)} for p in payload['items']]}
+                if 'items' in payload else unchanged(payload))
+        return data, {'model': model, 'input_tokens': 1, 'output_tokens': 1, 'elapsed_seconds': .1}
     service._response = fake_response
     service.record = lambda *args: None
     service.cost = lambda *args: 0

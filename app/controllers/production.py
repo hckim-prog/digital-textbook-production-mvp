@@ -163,6 +163,8 @@ class Production:
         if learning_report is not None:
             from core.manuscript.learning import apply
             approved = apply(approved, learning_report)
+        from core.manuscript.formatting import restore_symbol_fonts
+        approved = restore_symbol_fonts(approved, master)
         from core.qa import editorial
         stage('텍스트·출판 완결성 검사 중', 8)
         editorial_report = editorial.report(approved, editorial_issues, quick_report)

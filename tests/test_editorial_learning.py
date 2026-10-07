@@ -44,7 +44,7 @@ def fake_ai(monkeypatch, transform=None, cancelled=None):
     calls = []
     monkeypatch.setattr(service, 'model_config', lambda *_: {'enabled':True, 'reasoning_options':['none']})
     monkeypatch.setattr(service, 'record', lambda *a: None)
-    def respond(root, model, reasoning, prompt):
+    def respond(root, model, reasoning, prompt, **options):
         payload = json.loads(prompt.split('자료:\n')[1])
         calls.append((prompt, payload))
         if 'questions' in payload:

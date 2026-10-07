@@ -77,13 +77,17 @@ def test_quick_stop_button_saves_current_reply_and_resumes(tmp_path, monkeypatch
     monkeypatch.setattr(gui.QMessageBox, 'question', lambda *args: gui.QMessageBox.Yes)
     entered, release = Event(), Event()
     requests = []
-    def response(root, model, reasoning, prompt):
+    def response(root, model, reasoning, prompt, **options):
         requests.append(prompt)
         if len(requests) == 1:
             entered.set()
             assert release.wait(5), 'UI did not finish issuing cancellation'
         payload = json.loads(prompt.split('자료:\n',1)[1])
-        return {'text':payload['candidate'],'technical_change':False,'evidence':[],'reason':'변경 없음'}, {'model': model, 'input_tokens': 1, 'output_tokens': 1, 'elapsed_seconds': .1}
+        def unchanged(p):
+            return {'text':p['candidate'],'technical_change':False,'evidence':[],'reason':'변경 없음'}
+        data = ({'results':[{'block_id':p['block_id'],'response':unchanged(p)} for p in payload['items']]}
+                if 'items' in payload else unchanged(payload))
+        return data, {'model': model, 'input_tokens': 1, 'output_tokens': 1, 'elapsed_seconds': .1}
     monkeypatch.setattr(service, '_response', response)
     monkeypatch.setattr(service, 'record', lambda *args: None)
     monkeypatch.setattr(service, 'cost', lambda *args: .001)

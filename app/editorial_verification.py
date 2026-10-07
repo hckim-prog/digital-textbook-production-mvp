@@ -39,7 +39,7 @@ def run(app, root):
     job.structure().save(propose_rules(master), approved=True)
     report = {'passed':False, 'api_mode':'fixture_no_paid_calls', 'sandbox':str(sandbox)}
     calls, errors = [], []
-    def response(root, model, effort, prompt):
+    def response(root, model, effort, prompt, **options):
         p = json.loads(prompt.split('자료:\n',1)[1]); calls.append(p)
         if 'questions' in p:
             d = {'accepted':True,'reason':'고정 시험의 원고 근거·정답 검수'}

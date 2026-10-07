@@ -90,22 +90,34 @@ def inspect(master):
     return issues
 
 
+def audit_units(master):
+    # Split long prose as well as batches; do not truncate any source text.
+    # Original IDs remain intact so evidence and error locations still resolve.
+    for unit in text_units(master):
+        start = 0
+        while start < len(unit['text']):
+            end = min(start + 4000, len(unit['text']))
+            yield dict(unit, text=unit['text'][start:end])
+            if end == len(unit['text']):
+                break
+            start = end - 200  # Keep boundary phrases available to the reviewer.
+
+
 def audit(job, master, selection, cancelled=None, progress=None):
-    units = list(text_units(master))
+    units = list(audit_units(master))
     batches, batch, size = [], [], 0
     for unit in units:
         length = len(unit['text'])
-        if length > 12000:
-            raise ValueError('텍스트 QA 단위가 12,000자를 초과합니다: ' + unit['id'])
-        if size + length > 16000 and batch:
+        if batch and (size + length > 4000 or any(u['id'] == unit['id'] for u in batch)):
             batches.append(batch); batch, size = [], 0
         batch.append(unit); size += length
     if batch:
         batches.append(batch)
-    issues = []
+    issues, seen = [], set()
     for i, batch in enumerate(batches):
         if progress:
-            progress({'phase': f'독립 텍스트 QA {i+1}/{len(batches)}', 'percent': 73})
+            progress({'phase': f'최종 문장 검사 {i+1}/{len(batches)} · 응답 대기 최대 120초',
+                      'percent': 72 + int(3*i/max(len(batches), 1))})
         by_id = {u['id']: u['text'] for u in batch}
         def validate(data):
             if not isinstance(data, dict) or not isinstance(data.get('issues'), list):
@@ -124,8 +136,13 @@ def audit(job, master, selection, cancelled=None, progress=None):
             '제목·목록·캡션·문제의 정상적인 짧은 문구는 미완성으로 오인하지 마세요. 기술적 의심은 technical로 분리하고 공식 근거를 확인했다고 주장하지 마세요. '
             '현재 자료에서 확실한 오류만 definite=true. 문제 없으면 빈 issues. '
             '{"issues":[{"block_id":"원문 id","category":"typo","quote":"오류가 있는 정확한 원문 구절","message":"문제와 필요한 조치","definite":true}]}',
-            {'id': f'batch-{i}', 'units': batch}, validate, cancelled)
+            {'id': f'batch-{i}', 'units': batch}, validate, cancelled,
+            timeout=120, label=f'최종 문장 검사 {i+1}/{len(batches)}')
         for item in data['issues']:
+            signature = tuple(item.get(k) for k in ('block_id','category','quote','message','definite'))
+            if signature in seen:
+                continue
+            seen.add(signature)
             issues.append({**item, 'code': 'ai_' + item['category'],
                            'severity': 'error' if item['definite'] and item['category'] != 'technical' else 'warning'})
     return issues

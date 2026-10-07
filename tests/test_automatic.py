@@ -30,10 +30,14 @@ def fixtures(monkeypatch, response=None):
     calls=[]
     monkeypatch.setattr(service,'model_config',lambda *args:{'enabled':True,'reasoning_options':['none']})
     monkeypatch.setattr(service,'record',lambda *args:None)
-    def fake(root, model, effort, prompt):
+    def fake(root, model, effort, prompt, **options):
         payload=json.loads(prompt.split('자료:\n',1)[1])
         calls.append((model,payload))
-        if response:
+        if 'items' in payload:
+            data = {'results': [{'block_id': p['block_id'], 'response': response(model,p) if response else
+                {'text': p['candidate'].replace('실제 호출','실제로 호출'), 'technical_change':False,
+                 'evidence':[], 'reason':'표현 교정'}} for p in payload['items']]}
+        elif response:
             data=response(model,payload)
         elif model=='final_review':
             data={'accept':True,'meaning_preserved':True,'evidence_supported':False,'reason':'의미 유지 확인'}

@@ -680,12 +680,12 @@ class MainWindow(QMainWindow):
 
     def _failed(self, message):
         self.timer.stop()
+        self.resume_build = self.is_building
         self.busy = False
         self.is_reviewing = False
         self.is_building = False
         self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.status.setText("작업 실패")
+        self.status.setText("제작 중단 · 저장된 응답으로 이어서 제작 가능" if self.resume_build else "작업 실패")
         self.update_buttons()
         QMessageBox.warning(self, "작업 실패", message)
 
@@ -1063,7 +1063,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, '자동 출판 준비 실패', str(exc))
                 return
             request_lines.append(f'문장 교정: 대상 {len(eligible)}문단 · 최대 {len(eligible)*3}회 요청\n'
-                                 '교정 → 기술 검토 → 변경 문장 재검사 후 반영합니다.')
+                                 '최대 3문단씩 묶어 교정·기술 검토하며, 동시에 최대 2개 요청을 처리합니다.\n'
+                                 '변경 문장은 원문 순서로 개별 재검사 후 반영합니다.')
         if depth_mode:
             request_lines.append(f'소제목 자동 보완: 절별로 분석하여 최대 {max_depth}단계 제목까지 추가합니다. 목차 AI 요청은 별도입니다.')
         if allow_restructure:
@@ -1071,7 +1072,7 @@ class MainWindow(QMainWindow):
         if learning:
             request_lines.append('학습 문제 추가: 부족한 절·장마다 생성과 검수 각 1회. 본문·코드를 읽기 전용 근거로 전송합니다.')
         if editorial_ai:
-            request_lines.append('문장 최종 검사: 최종 후보 약 16,000자 묶음마다 1회 요청합니다.')
+            request_lines.append('문장 최종 검사: 최대 4,000자 묶음마다 순서대로 검사합니다. 응답 대기시간은 120초입니다.')
         if request_lines:
             models_text = '\n'.join(label + ': ' + str(automatic_models[role][0]) for role,label,_ in ROLES) if run_ai else '목차 분석 모델: ' + str(structure_model)
             if QMessageBox.question(self, 'AI 사용 범위와 비용 확인',

@@ -66,10 +66,14 @@ def run(app, root):
         assert ai['qa']['passed']
         from core.ai import service, automatic
         requests=[]
-        def automatic_response(root,model,reasoning,prompt):
+        def automatic_response(root,model,reasoning,prompt,**options):
             requests.append(prompt)
             payload=json.loads(prompt.split('자료:\n',1)[1])
-            if prompt.startswith('독립 검수자'):
+            if 'items' in payload:
+                data={'results':[{'block_id':p['block_id'],'response':{
+                    'text':p['candidate'].replace('첫 번째 본문입니다.','첫 번째 본문을 살펴봅니다.'),
+                    'technical_change':False,'evidence':[],'reason':'고정 교정'}} for p in payload['items']]}
+            elif prompt.startswith('독립 검수자'):
                 data={'accept':True,'meaning_preserved':True,'evidence_supported':False,'reason':'고정 검수'}
             else:
                 data={'text':payload['candidate'].replace('첫 번째 본문입니다.','첫 번째 본문을 살펴봅니다.'),
