@@ -12,7 +12,7 @@ from docx.text.paragraph import Paragraph
 from core.master import Block, Master, file_hash
 from core.manuscript.code_blocks import cell_text, scan_code_sources
 from core.manuscript.numbering import Numbering
-from core.manuscript.content import read_inlines, cell_inlines, plain_text
+from core.manuscript.content import read_inlines, read_table, plain_text, walk_inlines
 
 
 def _kind(text: str, style: str) -> str:
@@ -58,7 +58,7 @@ def read_docx(source: Path, work_dir: Path, progress=None) -> Master:
     standalone_code = {item.body_start: item for item in code_sources if item.table_cell is None}
     covered_paragraphs = {position for item in code_sources if item.body_end > item.body_start
                           for position in range(item.body_start + 1, item.body_end + 1)}
-    table_code = {(item.body_start, *item.table_cell): item for item in code_sources if item.table_cell is not None}
+    table_code = {item.block_id: item.text for item in code_sources if item.table_cell is not None}
     blocks: list[Block] = []
     saved: dict[str, str] = {}
     numbering = Numbering(doc)
@@ -75,22 +75,11 @@ def read_docx(source: Path, work_dir: Path, progress=None) -> Master:
             continue
         if child.tag == qn("w:tbl"):
             table = Table(child, doc)
-            rich_cells = [[cell_inlines(cell, doc, assets, saved) for cell in row.cells] for row in table.rows]
-            rows = [[table_code[(index, ri, ci)].text if (index, ri, ci) in table_code else cell.text
-                     for ci, cell in enumerate(row.cells)] for ri, row in enumerate(table.rows)]
-            for ri, row in enumerate(rows):
-                for ci in range(len(row)):
-                    if (index, ri, ci) not in table_code:
-                        rows[ri][ci] = plain_text(rich_cells[ri][ci])
-            # The source scanner is the single authority for code cells. A
-            # mention of cout/std:: inside prose is not itself a code block.
-            cell_kinds = [["code-output" if "실행 결과" in cell[:15] else "paragraph" for cell in row] for row in rows]
-            for ri, ci in ((ri, ci) for ri, row in enumerate(rows) for ci, _ in enumerate(row)):
-                if (index, ri, ci) in table_code:
-                    cell_kinds[ri][ci] = "code-block"
+            prepared = read_table(table, doc, assets, saved, block_id, table_code)
+            rows, rich_cells, cell_kinds = prepared['rows'], prepared['rich_cells'], prepared['cell_kinds']
             if blocks and "실행결과는다음과같다" in blocks[-1].text.replace(" ", "") and len(rows) == 1:
                 cell_kinds = [["code-output" for _ in row] for row in rows]
-            flat = [item for row in rich_cells for cell in row for item in cell]
+            flat = list(walk_inlines(item for row in rich_cells for cell in row for item in cell))
             blocks.append(Block(block_id, "table", rows=rows, cell_kinds=cell_kinds, rich_cells=rich_cells,
                                 assets=[i["asset"] for i in flat if i["kind"] == "image"],
                                 links=[i["href"] for i in flat if i["kind"] == "link" and i.get("href")]))

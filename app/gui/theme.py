@@ -27,6 +27,10 @@ def apply_light_theme(app):
         QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #243247; }
         QLabel { background: transparent; }
         QScrollArea { border: none; }
+        QTabWidget::pane { border: none; }
+        QTabBar::tab { background: #e9eef5; color: #52627a; padding: 9px 22px;
+                      margin-right: 5px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+        QTabBar::tab:selected { background: white; color: #1d4ed8; font-weight: 600; }
         QLineEdit, QComboBox, QSpinBox, QTextEdit { background: white; color: #243247;
                     border: 1px solid #c5cfdd; border-radius: 5px; padding: 5px; }
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus { border-color: #2563eb; }

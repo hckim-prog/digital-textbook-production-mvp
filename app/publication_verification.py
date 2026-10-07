@@ -18,13 +18,27 @@ def run(app, root):
         for t in ['Chapter 1 시작','1.1 첫 번째 주제','첫 번째 본문입니다.','1.2 두 번째 주제','두 번째 본문입니다.']:doc.add_paragraph(t)
         doc.add_table(rows=1, cols=1).cell(0, 0).text = 'int main() {\n\treturn 0;\n}'
         doc.add_table(rows=1, cols=1).cell(0, 0).text = 'cout << getLarger(10.0, 20.5) << endl;'
+        outer = doc.add_table(rows=1, cols=1).cell(0, 0)
+        outer.text = '내부 표 앞 설명'
+        inner = outer.add_table(rows=2, cols=2)
+        inner.cell(0, 0).text = '001010001'
+        inner.cell(0, 1).text = 'int main() {\n\treturn 0;\n}'
+        inner.cell(1, 0).text = '행과 열 유지'
+        inner.cell(1, 1).text = '마지막 셀'
+        outer.add_paragraph('내부 표 뒤 설명')
+        paragraph = doc.add_paragraph('수학 첨자 ᵀ ᵢ ⱼ · ')
+        paragraph.add_run('\uf02d').font.name = 'Symbol'
+        doc.add_paragraph('끝 문자 V\u200b')
         doc.save(source)
         job=Production(sandbox,source);job.analyze()
         for theme in ['auto', 'standard', 'lab', 'reading']:
             built=publishing.publish(job,['web','pdf','epub'],theme=theme)
             assert built['qa']['passed']
             assert built['design']['id'] == ('lab' if theme == 'auto' else theme)
+            assert 'font-family:Symbol' in Path(built['outputs']['web']).read_text(encoding='utf-8')
         result['design_themes']=['auto','standard','lab','reading']
+        result['nested_table_all_formats'] = True
+        result['math_symbol_and_zero_width_preserved'] = True
         result['automatic_outline_output']=True
         from core.manuscript import depth
         def fake_depth(root, model, reasoning, prompt):

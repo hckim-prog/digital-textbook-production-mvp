@@ -7,6 +7,48 @@ from core.ai.workflow import read_json
 from core.cancellation import check_cancelled
 
 
+def diagnostic_summary(report):
+    hard = len(report['hard_issues'])
+    structure = len(report['issues']) - hard
+    parts = []
+    if hard:
+        parts.append(f'원문 보존 확인 필요 {hard}건')
+    if structure:
+        parts.append(f'목차 확인 항목 {structure}건')
+    return ' · '.join(parts) or f"자동 제작 가능 · 목차 {len(report['nodes'])}개"
+
+
+def diagnostic_error(job, report, title, issues=None):
+    selected = report['issues'] if issues is None else issues
+    lines = [title + ' (AI 문장 교정 미실행)']
+    lines.extend((i['block_id'] + ' ' + i['message']).strip() for i in selected[:3])
+    if len(selected) > 3:
+        lines.append(f'외 {len(selected) - 3}건')
+    if report['hard_issues']:
+        lines.append('원문 내용이 모두 보존됐는지 확인한 뒤 다시 제작해 주세요.')
+        other = len(report['issues']) - len(report['hard_issues'])
+        if other:
+            lines.append(f'별도로 목차 확인 항목 {other}건이 있습니다.')
+    lines.append('전체 내용은 원고 선택 아래의 ‘진단 결과 보기’에서 확인할 수 있습니다.')
+    lines.append('진단 보고서: ' + str(job.work / 'preflight.html'))
+    return '\n'.join(lines)
+
+
+def save_preflight(job, report):
+    save_report(report, job.work / 'preflight.json')
+    def section(title, issues):
+        rows = ''.join('<li>' + escape((i['block_id'] + ' ' + i['message']).strip()) + '</li>' for i in issues)
+        return f'<h2>{title} {len(issues)}건</h2><ul>{rows}</ul>' if issues else ''
+    hard = report['hard_issues']
+    structure = [i for i in report['issues'] if i not in hard]
+    (job.work / 'preflight.html').write_text(
+        '<!doctype html><html lang="ko"><meta charset="utf-8"><title>원고 사전 진단</title>'
+        '<style>body{font-family:"Malgun Gothic",sans-serif;max-width:1000px;margin:2rem auto;padding:1rem;line-height:1.7}li{margin:.7rem 0}</style>'
+        '<h1>' + escape(diagnostic_summary(report)) + '</h1>'
+        + section('원문 보존 확인', hard) + section('목차 확인 항목', structure)
+        + '<p>' + escape(report['note']) + '</p></html>', encoding='utf-8')
+
+
 def preflight(job, use_existing_draft=False):
     master=job.master()
     integrity=check(master, job.source, job.work/'assets', {})
@@ -30,10 +72,7 @@ def preflight(job, use_existing_draft=False):
             'issues':hard+structure['issues'], 'nodes':structure['nodes'], 'origin':origin,
             'source_hash':master.source_hash, 'warnings':integrity['warnings'],
             'note':'자동 진단은 제목 단서·순서·범위·원문 보존을 검사하며 내용의 정확성을 보증하지 않습니다.'}
-    save_report(report,job.work/'preflight.json')
-    rows=''.join('<li>'+escape(i['block_id']+' '+i['message'])+'</li>' for i in report['issues'])
-    (job.work/'preflight.html').write_text('<!doctype html><meta charset="utf-8"><title>원고 사전 진단</title><h1>'
-        +('자동 제작 가능' if report['passed'] else '원고 보완 필요')+'</h1><ul>'+rows+'</ul><p>'+escape(report['note'])+'</p>',encoding='utf-8')
+    save_preflight(job, report)
     return report
 
 
@@ -57,7 +96,8 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
     report=preflight(job, use_existing_draft=depth_mode)
     stop()
     if report['hard_issues'] or report['origin']=='invalid-saved-structure':
-        raise ValueError('원고 보완 필요 (AI 교정 미실행): '+ '\n'.join(i['block_id']+' '+i['message'] for i in report['issues']))
+        raise ValueError(diagnostic_error(job, report, '제작을 시작하지 못했습니다',
+                                         report['hard_issues'] or report['issues']))
     master=job.master()
     if depth_mode:
         from core.manuscript.depth import enrich
@@ -66,8 +106,8 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
         report['issues'] = []
     if not report['passed']:
         if not allow_restructure:
-            raise ValueError('구조 보완 필요 (AI 교정 미실행): '+ '\n'.join(i['block_id']+' '+i['message'] for i in report['issues'])
-                             +'\n사전 진단 결과를 확인하거나 AI 구조 재구성을 허용하세요.')
+            raise ValueError(diagnostic_error(job, report, '목차 구성을 확인해 주세요')
+                             +'\n검토·관리에서 목차를 확인하거나 소제목 자동 보완을 선택하세요.')
         ai_payload(master)  # Enforce input limit before requesting.
         if not structure_model: raise ValueError('구조 분석에 사용할 기술 검토 모델을 선택하세요.')
         emit({'phase':'AI 구조 재구성 중 · 본문은 보존','percent':8})
@@ -83,7 +123,8 @@ def publish(job, formats, destination=None, progress=None, *, run_ai=False, mode
         save_report(report,job.work/'preflight-ai.json')
         stop()
         if not report['passed']:
-            raise ValueError('AI 구조 검사 미통과 (교정 미실행): '+ '\n'.join(i['block_id']+' '+i['message'] for i in report['issues']))
+            save_preflight(job, report)
+            raise ValueError(diagnostic_error(job, report, 'AI 목차 구성 검사 미통과'))
     stop()
     automatic_result = None
     if run_ai and automatic_models is not None:

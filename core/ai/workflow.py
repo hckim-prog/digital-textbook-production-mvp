@@ -71,7 +71,33 @@ class ReviewWorkflow:
 
     def baseline(self):
         if self.active:
-            return Master.load(self.folder / 'baseline.json')
+            baseline = Master.load(self.folder / 'baseline.json')
+            # Earlier readers skipped tables inside cells. Tables cannot be
+            # manually corrected by this workflow; recover their source data
+            # in memory without rewriting the baseline or decision histories.
+            if baseline.source_hash == self.original.source_hash:
+                original = {b.id: b for b in self.original.blocks}
+                recovered = False
+                for index, block in enumerate(baseline.blocks):
+                    source = original.get(block.id)
+                    if source and source.kind == block.kind == 'table':
+                        source_nested = any(i['kind'] == 'table' for row in source.rich_cells for cell in row for i in cell)
+                        baseline_nested = any(i['kind'] == 'table' for row in block.rich_cells for cell in row for i in cell)
+                        if source_nested and not baseline_nested:
+                            baseline.blocks[index] = copy.deepcopy(source)
+                            recovered = True
+                if recovered:
+                    # Newly recovered images can shift asset filenames in later
+                    # blocks. Refresh immutable content and unchanged source
+                    # inlines together, retaining every manually changed text.
+                    for index, block in enumerate(baseline.blocks):
+                        source = original.get(block.id)
+                        if source and source.kind == block.kind:
+                            if source.kind == 'table' or source.assets:
+                                baseline.blocks[index] = copy.deepcopy(source)
+                            elif source.text == block.text:
+                                block.inlines = copy.deepcopy(source.inlines)
+            return baseline
         legacy = self.legacy()
         result = approved_master(self.original, legacy)
         texts = {b.id: b.text for b in result.blocks}

@@ -29,10 +29,30 @@ def _code_markup(block_id, text, kind="code-block"):
     return f'<pre class="{kind}" data-block-id="{escape(block_id, quote=True)}"><code>{escape(text, quote=False)}</code></pre>'
 
 
-def inline_html(items):
+def _table_html(table_id, rows, kinds, rich_cells, cancelled=None):
+    rendered = []
+    for ri, row in enumerate(rows):
+        check_cancelled(cancelled)
+        cells = []
+        for ci, value in enumerate(row):
+            kind = kinds[ri][ci] if ri < len(kinds) and ci < len(kinds[ri]) else 'paragraph'
+            rich = rich_cells[ri][ci] if ri < len(rich_cells) and ci < len(rich_cells[ri]) else []
+            content = (_code_markup(f'{table_id}-r{ri}c{ci}', value, kind)
+                       if kind in ('code-block', 'code-output') else
+                       (inline_html(rich, cancelled) if rich else escape(value).replace('\n', '<br />')))
+            cells.append(f'<td>{content}</td>')
+        rendered.append('<tr>' + ''.join(cells) + '</tr>')
+    return f'<table data-table-id="{escape(table_id, quote=True)}">' + ''.join(rendered) + '</table>'
+
+
+def inline_html(items, cancelled=None):
     parts = []
     for item in items:
+        check_cancelled(cancelled)
         kind = item["kind"]
+        if kind == 'table':
+            parts.append(_table_html(item['id'], item['rows'], item['cell_kinds'], item['rich_cells'], cancelled))
+            continue
         if kind == "image":
             parts.append(f'<img src="assets/{escape(item["asset"], quote=True)}" alt="원고 이미지" />')
             continue
@@ -43,6 +63,8 @@ def inline_html(items):
                 value = f'<a href="{escape(href, quote=True)}">{value}</a>'
         if kind == "math":
             value = f'<span class="math-expression" data-omml="{escape(item.get("xml", ""), quote=True)}">{value}</span>'
+        if item.get('font') == 'Symbol':
+            value = f'<span style="font-family:Symbol">{value}</span>'
         script = item.get("script")
         if script in ("superscript", "subscript"):
             tag = "sup" if script == "superscript" else "sub"
@@ -82,17 +104,7 @@ def html_body(master: Master, reader=False, cancelled=None):
             content = _code_markup(b.id, b.text, b.kind)
             content += inline_html([{"kind": "image", "asset": name} for name in b.assets])
         elif b.kind == "table":
-            rows = []
-            for ri, row in enumerate(b.rows):
-                check_cancelled(cancelled)
-                cells = []
-                for ci, value in enumerate(row):
-                    kind = b.cell_kinds[ri][ci] if ri < len(b.cell_kinds) and ci < len(b.cell_kinds[ri]) else "paragraph"
-                    rich = b.rich_cells[ri][ci] if ri < len(b.rich_cells) and ci < len(b.rich_cells[ri]) else []
-                    cell = _code_markup(f"{b.id}-r{ri}c{ci}", value, kind) if kind in ("code-block", "code-output") else (inline_html(rich) if rich else escape(value).replace("\n", "<br />"))
-                    cells.append(f"<td>{cell}</td>")
-                rows.append("<tr>" + "".join(cells) + "</tr>")
-            content = '<div class="table-wrap"><table>' + "".join(rows) + "</table></div>"
+            content = '<div class="table-wrap">' + _table_html(b.id, b.rows, b.cell_kinds, b.rich_cells, cancelled) + '</div>'
         else:
             value = inline_html(b.inlines) if b.inlines else escape(b.text).replace("\n", "<br />")
             if not b.inlines:
@@ -119,7 +131,8 @@ def web(master, source_assets, dest, theme="auto", cancelled=None):
 
 
 def _pdf_fonts():
-    for name, filename in (("Malgun", "malgun.ttf"), ("MalgunBold", "malgunbd.ttf"), ("CodeMono", "consola.ttf"), ("Symbols", "seguisym.ttf")):
+    for name, filename in (("Malgun", "malgun.ttf"), ("MalgunBold", "malgunbd.ttf"), ("CodeMono", "consola.ttf"), ("Symbols", "seguisym.ttf"),
+                           ('MathFallback', 'cambria.ttc'), ('WordSymbol', 'symbol.ttf')):
         path = Path("C:/Windows/Fonts") / filename
         if not path.is_file():
             raise RuntimeError("결과물에 필요한 Windows 글꼴을 찾을 수 없습니다: " + filename)
@@ -127,17 +140,23 @@ def _pdf_fonts():
             pdfmetrics.registerFont(TTFont(name, str(path)))
 
 
-def pdf_text(value):
+def pdf_text(value, font=''):
     normal = pdfmetrics.getFont("Malgun").face.charToGlyph
-    symbols = pdfmetrics.getFont("Symbols").face.charToGlyph
+    fallbacks = ['Symbols', 'MathFallback']
+    if font == 'Symbol':
+        fallbacks.insert(0, 'WordSymbol')
     result = []
     for char in value:
         if char == "\n":
             result.append("<br/>")
-        elif ord(char) not in normal and ord(char) in symbols:
-            result.append('<font name="Symbols">' + escape(char) + '</font>')
         else:
-            result.append(escape(char))
+            selected = next((name for name in fallbacks if ord(char) in pdfmetrics.getFont(name).face.charToGlyph), None) if ord(char) not in normal else None
+            # Character references keep zero-width source characters from
+            # being stripped at paragraph/fragment boundaries by ReportLab.
+            text = f'&#{ord(char)};' if char in '\u200b\u200c\u200d\ufeff' else escape(char)
+            if char in '\u200b\u200c\u200d\ufeff':
+                selected = 'MathFallback'
+            result.append(f'<font name="{selected}">{text}</font>' if selected else text)
     return "".join(result)
 
 
@@ -204,7 +223,11 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
                 flush()
                 output.append(picture(item["asset"], max_width))
                 continue
-            text = pdf_text(item.get("text", ""))
+            if item['kind'] == 'table':
+                flush()
+                output.append(pdf_table(item['id'], item['rows'], item['cell_kinds'], item['rich_cells'], max_width))
+                continue
+            text = pdf_text(item.get("text", ""), item.get('font', ''))
             if item["kind"] == "link" and item.get("href", "").startswith(("http://", "https://", "mailto:")):
                 text = f'<link href="{escape(item["href"], quote=True)}" color="#2356a0">{text}</link>'
             if item.get("script") in ("superscript", "subscript"):
@@ -213,6 +236,34 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
             buffer.append(text)
         flush()
         return output
+
+    def pdf_table(table_id, rows, kinds, rich_cells, width=473, track=False):
+        col_count = max(map(len, rows))
+        cell_width = width / col_count - 14
+        cells = []
+        for ri, row in enumerate(rows):
+            check_cancelled(cancelled)
+            rendered = []
+            for ci, value in enumerate(row):
+                kind = kinds[ri][ci] if ri < len(kinds) and ci < len(kinds[ri]) else ''
+                rich = rich_cells[ri][ci] if ri < len(rich_cells) and ci < len(rich_cells[ri]) else [{'kind':'text','text':value}]
+                rendered.append([CodeBlock(f'{table_id}-r{ri}c{ci}', value, code_layout,
+                                          kind=kind, accent=design['accent'])]
+                                if kind in ('code-block','code-output') else flow(rich, styles['BodyText'], cell_width))
+            cells.append(rendered)
+        table = PublicationTable(cells, colWidths=[width / col_count] * col_count, splitInRow=1)
+        # Only the outer cell is tracked: overlapping nested rectangles would
+        # assign the same PDF glyph to two cells in the preservation check.
+        if track:
+            for ri, row_styles in enumerate(table._cellStyles):
+                for ci, cell_style in enumerate(row_styles):
+                    cell_style.source_cell = (table_id, ri, ci)
+        table.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.4,colors.HexColor('#cedadd')),
+                                   ('ROWBACKGROUNDS',(0,0),(-1,-1),[tint,colors.white]),
+                                   ('VALIGN',(0,0),(-1,-1),'TOP'),
+                                   ('LEFTPADDING',(0,0),(-1,-1),7), ('RIGHTPADDING',(0,0),(-1,-1),7),
+                                   ('TOPPADDING',(0,0),(-1,-1),7), ('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+        return table
 
     story = [Spacer(1, 90), Paragraph("DIGITAL TEXTBOOK", styles['Heading3']),
              Spacer(1, 18), Paragraph(pdf_text(master.title), styles["Title"]),
@@ -233,26 +284,7 @@ def pdf(master, source_assets, dest, filename="textbook.pdf", theme="auto", canc
             story.append(CodeBlock(b.id, b.text, code_layout, kind=b.kind, accent=design["accent"]))
             story.extend(picture(name) for name in b.assets)
         elif b.kind == "table" and b.rows:
-            col_count = max(map(len, b.rows))
-            cell_width = 473 / col_count - 14
-            cells = []
-            for ri, row in enumerate(b.rows):
-                check_cancelled(cancelled)
-                rendered_row = []
-                for ci, value in enumerate(row):
-                    kind = b.cell_kinds[ri][ci] if ri < len(b.cell_kinds) and ci < len(b.cell_kinds[ri]) else ""
-                    rich = b.rich_cells[ri][ci] if ri < len(b.rich_cells) and ci < len(b.rich_cells[ri]) else [{"kind": "text", "text": value}]
-                    rendered_row.append([CodeBlock(f"{b.id}-r{ri}c{ci}", value, code_layout, kind=kind, accent=design["accent"])] if kind in ("code-block", "code-output") else flow(rich, styles["BodyText"], cell_width))
-                cells.append(rendered_row)
-            table = PublicationTable(cells, colWidths=[473 / col_count] * col_count, splitInRow=1)
-            for ri, row_styles in enumerate(table._cellStyles):
-                for ci, cell_style in enumerate(row_styles):
-                    cell_style.source_cell = (b.id, ri, ci)
-            table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#cedadd")),
-                                       ("ROWBACKGROUNDS", (0, 0), (-1, -1), [tint, colors.white]),
-                                       ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                       ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
-            story.append(table)
+            story.append(pdf_table(b.id, b.rows, b.cell_kinds, b.rich_cells, track=True))
         else:
             items = list(b.inlines) if b.inlines else [{"kind": "text", "text": b.text}] + [{"kind": "image", "asset": name} for name in b.assets]
             if b.list_label:

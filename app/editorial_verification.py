@@ -78,7 +78,10 @@ def run(app, root):
             assert not any(p.get('id')=='outline-0001' for p in calls if 'sources' in p)
             assert built['editorial']['ai_audited'] and source.read_bytes()==original
             assert win.editorial_button.isEnabled() and '추가 학습 문제: 7개' in win.result_info.text()
-            scroll = win.findChild(QScrollArea); scroll.ensureWidgetVisible(win.learning_ai)
+            for _ in range(4):
+                app.processEvents()
+            assert win.result_info.height() >= win.result_info.heightForWidth(win.result_info.width()), 'result text clipped'
+            scroll = win.findChild(QScrollArea); scroll.ensureWidgetVisible(win.result_info)
             app.processEvents(); win.grab().save(str(base/'gui.png'))
             before = job.last_result()['folder']
             try:

@@ -79,7 +79,7 @@ def run(app, root):
                 assert win.build_button.text() == '이어서 제작'
                 assert '중단 및 저장 완료' in win.status.text()
                 assert win.production().last_result() is None
-                win.findChild(QScrollArea).ensureWidgetVisible(win.quick_stop)
+                win.findChild(QScrollArea).ensureWidgetVisible(win.build_button)
                 win.grab().save(str(audit / 'stopped.png'))
                 report['stop_saved_without_failure'] = True
                 win.build_button.click()

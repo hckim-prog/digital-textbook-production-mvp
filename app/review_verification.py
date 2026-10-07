@@ -30,6 +30,7 @@ def run(app, root):
     win.quick_mode.setChecked(False)
     win.quick_ai.setChecked(False)
     win.detail_toggle.setChecked(True)
+    win.pages.setCurrentIndex(1)
     win.show()
     state = {'stage': 0}
     report = {'frozen': bool(getattr(sys, 'frozen', False)), 'executable': sys.executable,
@@ -87,6 +88,7 @@ def run(app, root):
                     job = win.production()
                     assert [i['status'] for i in job.suggestions()] == ['approved'] * 3
                     assert job.workflow().output_master().blocks[0].text == targets[-1]
+                    win.pages.setCurrentIndex(0)
                     win.build_button.click()
                     state['stage'] = 4
             elif stage == 4:
@@ -96,7 +98,8 @@ def run(app, root):
                 report['decisions'] = win.production().suggestions()
                 win.review_filter.setCurrentIndex(1)
                 assert win.table.rowCount() == 3
-                scroll = win.findChild(QScrollArea)
+                win.pages.setCurrentIndex(1)
+                scroll = win.pages.widget(1)
                 scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
                 state['stage'] = 5
             elif stage == 5:

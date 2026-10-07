@@ -16,7 +16,16 @@ class ComparisonDialog(QDialog):
         self.setWindowTitle('AI 모델 비교 · 제안 검토')
         self.resize(1100, 650)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('모델별 제안을 검토하면 실제 승인률이 보고서에 저장됩니다. 본 원고의 승인 상태와 별도로 관리합니다.'))
+        note = QLabel('모든 선택 모델의 실행 결과를 아래에서 확인하세요. 수정 제안의 승인·거절은 비교 평가용으로 저장됩니다.')
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.model_results = QTableWidget(0, 5)
+        self.model_results.setHorizontalHeaderLabels(['모델', '실행 결과', '검토 문단', '수정 제안', '승인률'])
+        self.model_results.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        for col, width in enumerate((180, 230, 100, 100, 140)):
+            self.model_results.setColumnWidth(col, width)
+        layout.addWidget(self.model_results)
+        layout.addWidget(QLabel('수정 제안 · 제안이 있는 항목만 표시합니다. 제안 0건은 원문이 완벽하다는 뜻은 아닙니다.'))
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(['모델', '원문', '수정 제안', '이유', '상태'])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -51,7 +60,19 @@ class ComparisonDialog(QDialog):
                 self.table.setItem(row, col, cell)
             self.table.setRowHeight(row, 90)
         rows = json.loads((self.folder / 'model-comparison-rows.json').read_text(encoding='utf-8'))
-        self.summary.setText(' · '.join(f"{r['model_id']}: 승인률 {r.get('approval_rate', '미검토')}" for r in rows))
+        self.model_results.setRowCount(len(rows))
+        self.model_results.setFixedHeight(min(220, 44 + 32 * len(rows)))
+        for index, result in enumerate(rows):
+            count = int(result.get('suggestions', 0))
+            status = ('검토 완료' if result.get('sample_count', 0) else '검토 대상 없음') if result.get('success') else '호출 실패 포함'
+            rate = '제안 없음' if not count else str(result.get('approval_rate', '미검토'))
+            if isinstance(result.get('approval_rate'), (int, float)) and count:
+                rate += '%'
+            for col, value in enumerate((result['model_id'], status, result.get('sample_count', 0), f'{count}건', rate)):
+                self.model_results.setItem(index, col, QTableWidgetItem(str(value)))
+            self.model_results.setRowHeight(index, 32)
+        self.summary.setText('수정 제안을 선택해 승인·거절·보류로 평가하세요. 비교 평가는 본 원고에 적용되지 않습니다.'
+                             if items else '표시할 수정 제안이 없습니다. 모델별 실행 결과는 위 표에서 확인하세요.')
 
     def decide(self, status):
         selected = [self.keys[index.row()] for index in self.table.selectionModel().selectedRows()]

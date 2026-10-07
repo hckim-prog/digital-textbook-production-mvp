@@ -18,21 +18,25 @@ def read_tables(document):
         by_page[item['page']].append((key, pymupdf.Rect(item['rect'])))
     stream, seen = [], set()
     for page_no, page in enumerate(document):
-        for block in page.get_text('rawdict')['blocks']:
-            for line in block.get('lines', []):
-                for span in line['spans']:
-                    for char in span['chars']:
-                        rect = pymupdf.Rect(char['bbox'])
-                        center = (rect.tl + rect.br) / 2
-                        matches = [key for key, bounds in by_page[page_no] if bounds.contains(center)]
-                        if len(matches) > 1:
-                            raise ValueError('Overlapping PDF table cells')
-                        if matches:
-                            key = matches[0]
-                            cells[key] += char['c']
-                            if key[0] not in seen:
-                                stream.append(table_marker(key[0]))
-                                seen.add(key[0])
-                        elif rect.y1 <= 800:
-                            stream.append(char['c'])
+        # Text extraction drops trailing zero-width glyphs. Read the actual
+        # drawing operations instead, retaining their Unicode and source order.
+        # Invisible text (render mode 3) is not evidence of visible content.
+        for span in page.get_texttrace():
+            if span['type'] == 3 or span.get('opacity', 1) == 0:
+                continue
+            for codepoint, glyph, origin, bounds in span['chars']:
+                rect = pymupdf.Rect(bounds)
+                center = (rect.tl + rect.br) / 2
+                matches = [key for key, cell_bounds in by_page[page_no] if cell_bounds.contains(center)]
+                if len(matches) > 1:
+                    raise ValueError('Overlapping PDF table cells')
+                value = chr(codepoint)
+                if matches:
+                    key = matches[0]
+                    cells[key] += value
+                    if key[0] not in seen:
+                        stream.append(table_marker(key[0]))
+                        seen.add(key[0])
+                elif rect.y1 <= 800:
+                    stream.append(value)
     return ''.join(stream), cells

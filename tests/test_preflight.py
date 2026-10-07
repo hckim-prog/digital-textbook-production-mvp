@@ -33,7 +33,7 @@ def test_no_headings_blocks_before_any_api(tmp_path,monkeypatch):
     job=make_job(tmp_path,False)
     monkeypatch.setattr(job,'proofread',lambda *a,**k:pytest.fail('Paid proofreading reached'))
     monkeypatch.setattr(publishing,'propose_ai',lambda *a,**k:pytest.fail('Paid structure reached'))
-    with pytest.raises(ValueError,match='구조 보완 필요'):
+    with pytest.raises(ValueError,match='목차 구성을 확인'):
         publishing.publish(job,['web'],run_ai=True)
     assert not (job.work/'last-result.json').exists()
 
@@ -86,14 +86,14 @@ def test_invalid_ai_structure_stops_before_proofreading(tmp_path,monkeypatch):
     job=make_job(tmp_path,False)
     monkeypatch.setattr(publishing,'propose_ai',lambda root,m,*a,**k:[node(m.blocks[0],1,'임시 장')])
     monkeypatch.setattr(job,'proofread',lambda *a,**k:pytest.fail('Proofreading reached'))
-    with pytest.raises(ValueError,match='AI 구조 검사 미통과'):
+    with pytest.raises(ValueError,match='AI 목차 구성 검사 미통과'):
         publishing.publish(job,['web'],run_ai=True,allow_restructure=True,structure_model='chosen')
 
 
 def test_changed_source_blocks_even_with_ai_opt_in(tmp_path,monkeypatch):
     job=make_job(tmp_path);doc=Document(job.source);doc.add_paragraph('추가');doc.save(job.source)
     monkeypatch.setattr(publishing,'propose_ai',lambda *a,**k:pytest.fail('AI reached'))
-    with pytest.raises(ValueError,match='원고 보완 필요'):
+    with pytest.raises(ValueError,match='제작을 시작하지 못했습니다'):
         publishing.publish(job,['web'],allow_restructure=True)
 
 

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QRadioButton, QButtonGroup,
     QPushButton, QProgressBar, QScrollArea, QSpinBox, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from app.gui.controls import ClickComboBox
@@ -54,20 +54,33 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(14, 12, 14, 12)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setSpacing(14)
-        layout.setSizeConstraint(QLayout.SetMinimumSize)
-        scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
-        self._source_step(layout)
-        self._model_step(layout)
-        self._analysis_step(layout)
-        self._review_step(layout)
-        self._tools_step(layout)
-        self.status = QLabel("준비됨")
+        self.pages = QTabWidget()
+        page_layouts = []
+        for title in ("교재 제작", "검토·관리", "고급 설정"):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            body = QWidget()
+            layout = QVBoxLayout(body)
+            layout.setSpacing(10)
+            layout.setSizeConstraint(QLayout.SetMinimumSize)
+            scroll.setWidget(body)
+            self.pages.addTab(scroll, title)
+            page_layouts.append(layout)
+        outer.addWidget(self.pages, 1)
+        main, manage, advanced = page_layouts
+        intro = QLabel("원고를 선택하고 제작 설정을 확인한 뒤 ‘교재 만들기’를 누르세요.")
+        intro.setWordWrap(True)
+        main.addWidget(intro)
+        manage.addWidget(QLabel("목차, 교정 제안, 자동 수정 내역을 필요할 때 확인하세요."))
+        advanced.addWidget(QLabel("저장된 AI 설정을 사용합니다. 모델과 세부 옵션을 바꿀 때만 이 화면을 이용하세요."))
+        self._source_step(main, manage, advanced)
+        self._model_step(advanced)
+        self._analysis_step(manage)
+        self._review_step(manage, main, advanced)
+        self._tools_step(main, manage, advanced)
+        for page_layout in page_layouts:
+            page_layout.addStretch()
+        self.status = QLabel("DOCX 원고를 선택해 주세요.")
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -92,7 +105,7 @@ class MainWindow(QMainWindow):
         self.reasoning.currentTextChanged.connect(self.update_scope)
         self.update_file_info()
 
-    def _source_step(self, layout):
+    def _source_step(self, layout, manage, advanced):
         box = QGroupBox("① 원고 선택")
         form = QVBoxLayout(box)
         row = QHBoxLayout()
@@ -106,13 +119,22 @@ class MainWindow(QMainWindow):
         row.addWidget(browse)
         form.addLayout(row)
         self.file_info = QLabel()
+        self.file_info.setWordWrap(True)
         form.addWidget(self.file_info)
         self.analysis_info = QLabel("DOCX 원고를 선택하면 자동으로 준비합니다.")
         self.analysis_info.setWordWrap(True)
         form.addWidget(self.analysis_info)
+        self.source_notice = QLabel()
+        self.source_notice.setWordWrap(True)
+        self.source_notice.linkActivated.connect(lambda _: (self.pages.setCurrentIndex(1), self.show_preflight()))
+        self.source_notice.hide()
+        form.addWidget(self.source_notice)
         self.previous_button = QPushButton("이전 작업 불러오기")
         self.previous_button.clicked.connect(self.load_previous)
-        form.addWidget(self.previous_button)
+        row.addWidget(self.previous_button)
+        layout.addWidget(box)
+        inspection = QGroupBox("목차와 원고 진단")
+        form = QVBoxLayout(inspection)
         self.structure_button = QPushButton("목차 직접 편집 · 선택 사항")
         self.structure_button.clicked.connect(self.configure_structure)
         form.addWidget(self.structure_button)
@@ -125,10 +147,11 @@ class MainWindow(QMainWindow):
         self.preflight_button = QPushButton("사전 진단 상세 보기")
         self.preflight_button.clicked.connect(self.show_preflight)
         form.addWidget(self.preflight_button)
-        structure_options = QGroupBox("원고 구조")
+        manage.addWidget(inspection)
+        structure_options = QGroupBox("목차 세부 설정")
         structure_layout = QVBoxLayout(structure_options)
         self.depth_existing = QRadioButton("기존 구조 사용")
-        self.depth_ai = QRadioButton("AI 뎁스 자동 보완")
+        self.depth_ai = QRadioButton("AI로 소제목 자동 보완")
         self.depth_group = QButtonGroup(self)
         self.depth_group.addButton(self.depth_existing)
         self.depth_group.addButton(self.depth_ai)
@@ -136,10 +159,10 @@ class MainWindow(QMainWindow):
         structure_layout.addWidget(self.depth_existing)
         structure_layout.addWidget(self.depth_ai)
         depth_row = QHBoxLayout()
-        depth_row.addWidget(QLabel("최대 뎁스"))
+        depth_row.addWidget(QLabel("제목 최대 단계"))
         self.max_depth = ClickComboBox()
-        self.max_depth.addItem("3depth", 3)
-        self.max_depth.addItem("4depth", 4)
+        self.max_depth.addItem("3단계 · 장 → 절 → 소단원", 3)
+        self.max_depth.addItem("4단계 · 장 → 절 → 소단원 → 주제", 4)
         self.max_depth.setCurrentIndex(max(0, self.max_depth.findData(int(self.prefs.value('max_depth', 4)))))
         depth_row.addWidget(self.max_depth)
         structure_layout.addLayout(depth_row)
@@ -149,11 +172,10 @@ class MainWindow(QMainWindow):
         self.depth_ai.toggled.connect(lambda enabled: (self.prefs.setValue('depth_mode', 'ai' if enabled else 'existing'), self.max_depth.setEnabled(enabled and not self.busy)))
         self.depth_ai.toggled.connect(lambda _: self._depth_mode_changed())
         self.max_depth.currentIndexChanged.connect(lambda _: self.prefs.setValue('max_depth', self.max_depth.currentData()))
-        form.addWidget(structure_options)
-        layout.addWidget(box)
+        advanced.addWidget(structure_options)
 
     def _model_step(self, layout):
-        box = QGroupBox("② AI 교정 설정")
+        box = QGroupBox("AI 모델 설정")
         content = QVBoxLayout(box)
         form = QFormLayout()
         self.model_boxes = {}
@@ -183,7 +205,7 @@ class MainWindow(QMainWindow):
             form.addRow(label, field)
         content.addLayout(form)
         self.advanced_toggle = QToolButton()
-        self.advanced_toggle.setText("고급 설정 ▸")
+        self.advanced_toggle.setText("추론 강도 바꾸기 ▸")
         self.advanced_toggle.setCheckable(True)
         self.advanced_toggle.toggled.connect(self._toggle_advanced)
         content.addWidget(self.advanced_toggle)
@@ -249,9 +271,9 @@ class MainWindow(QMainWindow):
         content.addWidget(QLabel("원본은 변경하지 않고 수정 제안만 생성합니다."))
         layout.addWidget(box)
 
-    def _review_step(self, layout):
-        self.detail_toggle = QCheckBox("상세 검토 열기 · 단계별 실행 / 승인·거절·보류")
-        layout.addWidget(self.detail_toggle)
+    def _review_step(self, layout, main, advanced):
+        self.detail_toggle = QCheckBox("문장별로 직접 검토하기 · 선택 사항")
+        layout.insertWidget(layout.indexOf(self.analysis_panel), self.detail_toggle)
         self.analysis_panel.hide()
         box = QGroupBox("상세 교정 결과 · 수동 검토")
         box.hide()
@@ -306,8 +328,9 @@ class MainWindow(QMainWindow):
             self.review_buttons.append(button)
         content.addLayout(row)
         layout.addWidget(box)
-        production = QGroupBox("③ 자동 출판")
+        production = QGroupBox("② 제작 설정")
         p_layout = QVBoxLayout(production)
+        self.settings_panel = production
         design_row = QHBoxLayout()
         design_row.addWidget(QLabel("교재 디자인"))
         self.design_theme = ClickComboBox()
@@ -322,24 +345,36 @@ class MainWindow(QMainWindow):
         self.preview_design_button.clicked.connect(self.preview_design)
         design_row.addWidget(self.preview_design_button)
         p_layout.addLayout(design_row)
-        self.design_info = QLabel("디자인은 HTML·PDF·EPUB에 함께 적용됩니다. 미리보기는 예시 교재이며, 디자인 적용에는 API 비용이 들지 않습니다.")
+        self.design_info = QLabel("미리보기는 예시 교재입니다. 디자인 선택에는 AI 비용이 들지 않습니다.")
         self.design_info.setWordWrap(True)
         p_layout.addWidget(self.design_info)
-        self.quick_mode = QCheckBox("자동 출판 · 교정·기술 검토·재검사를 거쳐 수정본 제작")
+        output_policy = QGroupBox("제작 방식 · 수동 검토를 사용할 때")
+        policy_layout = QVBoxLayout(output_policy)
+        self.quick_mode = QCheckBox("자동 제작 사용 · 끄면 기존 승인본으로 제작")
         self.quick_mode.setChecked(True)
-        p_layout.addWidget(self.quick_mode)
-        self.quick_ai = QCheckBox("AI 자동 수정 실행 · 선택한 세 모델 사용 (추가 API 비용 발생)")
+        policy_layout.addWidget(self.quick_mode)
+        advanced.addWidget(output_policy)
+        self.quick_ai = QCheckBox("AI로 문장 교정하기 · 검사 후 수정본에 반영")
+        self.quick_ai.setToolTip("문장 교정 → 기술 검토 → 변경 문장 재검사를 거쳐 반영합니다. API 비용이 발생합니다.")
         self.quick_ai.setChecked(True)
         self.quick_mode.toggled.connect(self.quick_ai.setEnabled)
         p_layout.addWidget(self.quick_ai)
-        self.learning_ai = QCheckBox("부족한 절 확인 활동·장말 문제 보완 · 근거 및 정답 검수 후 반영 (API 비용 발생)")
+        self.learning_ai = QCheckBox("부족한 학습 문제와 정답 추가하기 · 새 내용 생성")
+        self.learning_ai.setToolTip("원고에 근거한 새 문제·정답·해설을 생성하고 별도 검수합니다. API 비용이 발생합니다.")
         self.learning_ai.setChecked(str(self.prefs.value('learning_ai', 'true')).lower() == 'true')
         self.learning_ai.toggled.connect(lambda value: self.prefs.setValue('learning_ai', value))
-        p_layout.addWidget(self.learning_ai)
-        self.editorial_ai = QCheckBox("교정 후 독립 텍스트 QA · 남은 오탈자·미완성 문장 검사 (API 비용 발생)")
+        self.editorial_ai = QCheckBox("제작 전 문장 최종 검사하기 · 남은 오류 확인")
+        self.editorial_ai.setToolTip("교정 후 남은 오탈자와 미완성 문장을 별도로 검사합니다. API 비용이 발생합니다.")
         self.editorial_ai.setChecked(str(self.prefs.value('editorial_ai', 'true')).lower() == 'true')
         self.editorial_ai.toggled.connect(lambda value: self.prefs.setValue('editorial_ai', value))
         p_layout.addWidget(self.editorial_ai)
+        self.depth_option = QCheckBox("소제목 자동 보완하기 · 장·절은 유지")
+        self.depth_option.setToolTip("장·절은 유지하고 필요한 하위 제목만 추가합니다. API 비용이 발생합니다.")
+        self.depth_option.setChecked(self.depth_ai.isChecked())
+        self.depth_option.toggled.connect(lambda checked: (self.depth_ai if checked else self.depth_existing).setChecked(True))
+        self.depth_ai.toggled.connect(self.depth_option.setChecked)
+        p_layout.addWidget(self.depth_option)
+        p_layout.addWidget(self.learning_ai)
         def update_enrichment_options():
             enabled = self.quick_mode.isChecked() and self.quick_ai.isChecked()
             self.learning_ai.setEnabled(enabled)
@@ -347,16 +382,15 @@ class MainWindow(QMainWindow):
         self.quick_mode.toggled.connect(update_enrichment_options)
         self.quick_ai.toggled.connect(update_enrichment_options)
         update_enrichment_options()
-        self.editorial_button = QPushButton("텍스트·출판 완결성 검사 보고서")
+        self.editorial_button = QPushButton("문장 최종 검사 결과 보기")
         self.editorial_button.clicked.connect(self.show_editorial_report)
-        p_layout.addWidget(self.editorial_button)
-        self.allow_restructure = QCheckBox("구조가 불명확하면 AI의 새 제목·목차 재구성 허용 (기술 검토 모델 / API 비용 발생)")
+        self.allow_restructure = QCheckBox("기본 목차가 부족할 때 AI 새 제목·목차 구성 허용 · API 비용 발생")
         self.allow_restructure.setToolTip("원문·코드·그림은 보존하고 새 제목만 추가합니다. 구조 검사 실패 시 교정 전에 멈춥니다. 현재 AI 구조 분석은 입력 60,000자까지 지원합니다.")
-        p_layout.addWidget(self.allow_restructure)
+        policy_layout.addWidget(self.allow_restructure)
         self.quick_mode.toggled.connect(self.allow_restructure.setEnabled)
-        note = QLabel("문장 교정과 원고 근거가 확인된 기술 수정은 재검사 후 반영합니다. 기존 코드·표·그림·검토 기록은 보존합니다.\n학습 보완은 새 문제를 추가하며, 장말의 단독 ‘추후 제공’ 표식만 검수된 문제로 교체합니다. 원본은 유지합니다.\n미완성 표식·확정 텍스트 오류가 남으면 출력을 중단합니다. 공식 문서 대조와 화면 이미지 내용 검증은 별도 확인이 필요합니다.")
+        note = QLabel("원본 DOCX와 수동 검토 기록은 유지합니다. 자동 수정은 검사 후 출력에 반영됩니다.\n학습 문제 추가는 새 내용을 생성합니다. 공식 문서·이미지 내용 대조와 사람의 최종 확인은 별도입니다.")
         note.setWordWrap(True)
-        p_layout.addWidget(note)
+        policy_layout.addWidget(note)
         folder_row = QHBoxLayout()
         project_root = self.root.parent.parent if self.root.name == "DigitalTextbookMaker" and self.root.parent.name.startswith("dist") else self.root
         default_output = project_root / "output"
@@ -374,13 +408,22 @@ class MainWindow(QMainWindow):
         format_row.addWidget(QLabel("출력 형식"))
         self.format_boxes = {}
         for key, label in (("web", "HTML"), ("pdf", "PDF"), ("epub", "EPUB")):
-            item = QCheckBox(label)
+            item = QCheckBox({"web": "웹 교재 (HTML)", "pdf": "인쇄용 (PDF)", "epub": "전자책 (EPUB)"}[key])
             item.setChecked(True)
             self.format_boxes[key] = item
             format_row.addWidget(item)
         format_row.addStretch()
         p_layout.addLayout(format_row)
-        self.build_button = QPushButton("자동 출판 시작")
+        self.settings_summary = QLabel()
+        self.settings_summary.setWordWrap(True)
+        p_layout.addWidget(self.settings_summary)
+        model_link = QPushButton("AI 모델·세부 설정 보기")
+        model_link.clicked.connect(lambda: self.pages.setCurrentIndex(2))
+        p_layout.addWidget(model_link)
+        main.addWidget(production)
+        creation = QGroupBox("③ 교재 제작")
+        p_layout = QVBoxLayout(creation)
+        self.build_button = QPushButton("교재 만들기")
         self.build_button.setProperty('primary', True)
         self.build_button.clicked.connect(self.build)
         self.quick_mode.toggled.connect(lambda _: self.update_buttons())
@@ -389,49 +432,66 @@ class MainWindow(QMainWindow):
         self.quick_stop.setToolTip("새 API 요청을 멈춥니다. 이미 보낸 요청은 응답을 받아 저장한 뒤 중단하며, 파일 생성은 안전한 지점에서 중단합니다.")
         self.quick_stop.clicked.connect(self.stop_review)
         p_layout.addWidget(self.quick_stop)
-        self.changes_button = QPushButton("자동 변경 관리 · 내역 보기 / 되돌리기")
+        self.changes_button = QPushButton("자동 수정 확인·되돌리기")
         self.changes_button.clicked.connect(self.show_quick_changes)
         self.changes_button.setEnabled(False)
-        p_layout.addWidget(self.changes_button)
         self.result_info = QLabel("제작 후 저장 위치가 여기에 표시됩니다.")
         self.result_info.setWordWrap(True)
         p_layout.addWidget(self.result_info)
-        layout.addWidget(production)
+        main.addWidget(creation)
+        self.result_layout = p_layout
+        changes = QGroupBox("제작 결과 검토")
+        changes_layout = QVBoxLayout(changes)
+        changes_layout.addWidget(self.changes_button)
+        changes_layout.addWidget(self.editorial_button)
+        layout.addWidget(changes)
+        for control in (self.quick_mode, self.quick_ai, self.editorial_ai, self.learning_ai, self.depth_ai, self.allow_restructure):
+            control.toggled.connect(self._update_settings_summary)
+        self.max_depth.currentIndexChanged.connect(self._update_settings_summary)
+        self._update_settings_summary()
 
-    def _tools_step(self, layout):
+    def _tools_step(self, layout, manage, advanced):
         results = QHBoxLayout()
-        self.qa_button = QPushButton("결과물 품질 확인")
+        self.qa_button = QPushButton("보존 검사 결과 보기")
         self.qa_button.clicked.connect(self.show_qa)
         self.open_output_button = QPushButton("결과 폴더 열기")
         self.open_output_button.clicked.connect(self.open_output)
         results.addWidget(self.qa_button)
         results.addWidget(self.open_output_button)
-        layout.addLayout(results)
-        toggle = QToolButton()
-        toggle.setText("고급 도구 ▸")
-        toggle.setCheckable(True)
-        layout.addWidget(toggle)
-        self.tools_panel = QWidget()
-        row = QHBoxLayout(self.tools_panel)
+        self.result_layout.addLayout(results)
+        self.tools_panel = QGroupBox("모델 확인·비교 · 선택 사항")
+        row = QVBoxLayout(self.tools_panel)
         self.tool_buttons = []
         for label, callback in (
-            ("API 연결 확인", self.api_test),
-            ("등록 모델 API 사용 가능 확인", self.check_models),
-            ("API 모델 검색·추가", self.add_model),
-            ("AI 모델 비교", self.compare_models),
-            ("이전 모델 비교 검토", self.review_comparison),
+            ("API 응답 시험 · 유료", self.api_test),
+            ("내 API 키로 사용할 수 있는 모델 확인", self.check_models),
+            ("모델 검색·추가", self.add_model),
+            ("원고 일부로 모델 비교 · 유료", self.compare_models),
+            ("이전 모델 비교 결과 보기", self.review_comparison),
         ):
             button = QPushButton(label)
             button.clicked.connect(callback)
             row.addWidget(button)
             self.tool_buttons.append(button)
-        self.tools_panel.hide()
-        toggle.toggled.connect(lambda checked: (self.tools_panel.setVisible(checked), toggle.setText("고급 도구 ▾" if checked else "고급 도구 ▸")))
-        layout.addWidget(self.tools_panel)
+        advanced.addWidget(self.tools_panel)
 
     def _toggle_advanced(self, checked):
         self.advanced.setVisible(checked)
-        self.advanced_toggle.setText("고급 설정 ▾" if checked else "고급 설정 ▸")
+        self.advanced_toggle.setText("추론 강도 바꾸기 ▾" if checked else "추론 강도 바꾸기 ▸")
+
+    def _update_settings_summary(self, *_):
+        if not hasattr(self, "settings_summary"):
+            return
+        automatic = self.quick_mode.isChecked() and self.quick_ai.isChecked()
+        has_ai = automatic or self.depth_ai.isChecked() or (self.quick_mode.isChecked() and self.allow_restructure.isChecked())
+        cost_note = ("선택한 AI 기능에는 API 비용이 발생합니다. 제작 시작 전에 요청 범위를 안내합니다."
+                     if has_ai else "추가 AI 요청 없이 원문과 기존 승인 내용을 사용합니다.")
+        if not self.quick_mode.isChecked():
+            cost_note = "기존 승인본 제작 모드입니다. 문장 자동 교정은 제외됩니다. " + cost_note
+        models = " · ".join(label.removesuffix(" 모델") + ": " +
+                            model_config(self.root, self.model_boxes[role].currentData()).get("display_name", self.model_boxes[role].currentData())
+                            for role, label, _ in ROLES)
+        self.settings_summary.setText(cost_note + "\n저장된 모델: " + models)
 
     def _model_changed(self, role, combo):
         self.prefs.setValue(role, combo.currentData())
@@ -440,6 +500,7 @@ class MainWindow(QMainWindow):
             self._update_reasoning()
         if hasattr(self, "scope_info"):
             self.update_scope()
+        self._update_settings_summary()
 
     @staticmethod
     def _append_model_option(combo, model):
@@ -483,10 +544,12 @@ class MainWindow(QMainWindow):
     def update_file_info(self):
         path = Path(self.source_edit.text()).resolve()
         if path.is_file() and path.suffix.lower() == ".docx":
-            self.file_info.setText(f"✓ 원고 선택 완료 · {path.name} · {path.stat().st_size / 1024 / 1024:.2f} MB\n파일 위치: {path.parent}")
+            self.file_info.setText(f"✓ 원고 선택 완료 · {path.name} · {path.stat().st_size / 1024 / 1024:.2f} MB")
+            self.file_info.setToolTip(str(path))
         else:
             self.file_info.setText("DOCX 원고를 선택해 주세요.")
         if self.analyzed_path != path:
+            self.source_notice.hide()
             self.resume_build = False
             self.structure_info.setText("목차 구성: 원고 준비 후 확인할 수 있습니다.")
             self.analyzed_path = None
@@ -498,20 +561,31 @@ class MainWindow(QMainWindow):
             self.prepare_timer.stop()
             if path.is_file() and path.suffix.lower() == ".docx":
                 self.prepare_timer.start(300)
+        self._fit_result_info()
         self.update_buttons()
+
+    def _fit_result_info(self):
+        # A growing result label must enlarge the scroll content, not shrink
+        # to one line underneath the surrounding fixed-size controls.
+        self.result_info.setMinimumHeight(max(0, self.result_info.heightForWidth(max(1, self.result_info.width()))))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'result_info'):
+            QTimer.singleShot(0, self._fit_result_info)
 
     def update_buttons(self):
         source_ok = Path(self.source_edit.text()).is_file() and self.source_edit.text().lower().endswith(".docx")
         analyzed = source_ok and self.analyzed_path == Path(self.source_edit.text()).resolve()
         self.structure_button.setEnabled(analyzed and not self.busy)
-        self.structure_button.setVisible(not self.depth_ai.isChecked())
         self.proofread_button.setEnabled(analyzed and not self.busy)
         self.stop_review_button.setEnabled(self.busy and self.is_reviewing and not self.cancel_review.is_set())
         self.build_button.setEnabled(analyzed and not self.busy)
-        self.build_button.setText("이어서 제작" if self.resume_build else ("자동 출판 시작" if self.quick_mode.isChecked() else "기존 승인본 제작 · 자동 교정 제외"))
+        self.build_button.setText("이어서 제작" if self.resume_build else ("교재 만들기" if self.quick_mode.isChecked() else "기존 승인본으로 만들기"))
         self.design_theme.setEnabled(not self.busy)
         self.depth_ai.setEnabled(not self.busy)
         self.depth_existing.setEnabled(not self.busy)
+        self.depth_option.setEnabled(not self.busy)
         self.max_depth.setEnabled(not self.busy and self.depth_ai.isChecked())
         self.preview_design_button.setEnabled(not self.busy)
         self.preflight_button.setEnabled(analyzed and not self.busy)
@@ -521,7 +595,9 @@ class MainWindow(QMainWindow):
         self.learning_ai.setEnabled(not self.busy and self.quick_mode.isChecked() and self.quick_ai.isChecked())
         self.editorial_ai.setEnabled(not self.busy and self.quick_mode.isChecked() and self.quick_ai.isChecked())
         self.editorial_button.setEnabled(analyzed and not self.busy)
-        self.quick_stop.setEnabled(self.busy and (self.is_reviewing or self.is_building) and not self.cancel_review.is_set())
+        active_creation = self.busy and (self.is_reviewing or self.is_building)
+        self.quick_stop.setVisible(active_creation)
+        self.quick_stop.setEnabled(active_creation and not self.cancel_review.is_set())
         self.quick_stop.setText("중단 처리 중…" if self.busy and self.cancel_review.is_set() else "중단 및 저장")
         self.detail_toggle.setEnabled(not self.busy)
         self.active_role.setEnabled(not self.busy)
@@ -539,6 +615,7 @@ class MainWindow(QMainWindow):
             button.setEnabled(not self.busy)
         self.open_output_button.setEnabled(bool(self.last_output_folder and self.last_output_folder.is_dir()) and not self.busy)
         self.qa_button.setEnabled(bool(self.last_report and self.last_report.is_file()) and not self.busy)
+        self.changes_button.setEnabled(bool(self.last_output_folder and (self.last_output_folder / 'reports/quick-changes.html').is_file()) and not self.busy)
         self.previous_button.setEnabled(not self.busy)
         self.tool_buttons[3].setEnabled(analyzed and not self.busy)
         self.advanced.setEnabled(not self.busy)
@@ -733,12 +810,16 @@ class MainWindow(QMainWindow):
 
     def _analysis_done(self, job, master):
         self.analyzed_path = job.source
-        from app.controllers.publishing import preflight
+        from app.controllers.publishing import preflight, diagnostic_summary
         try:
             diagnostic = preflight(job)
-            self.preflight_info.setText("사전 진단: " + (f"자동 제작 가능 · 목차 {len(diagnostic['nodes'])}개" if diagnostic['passed'] else f"보완 필요 · {len(diagnostic['issues'])}개 항목 (상세 보기)"))
+            self.preflight_info.setText('사전 진단: ' + diagnostic_summary(diagnostic))
+            self.source_notice.setText(diagnostic_summary(diagnostic) + " · <a href='details'>진단 결과 보기</a>")
+            self.source_notice.setVisible(not diagnostic['passed'])
         except (ValueError, OSError) as exc:
             self.preflight_info.setText("사전 진단 실패: " + str(exc))
+            self.source_notice.setText("원고 진단 실패 · <a href='details'>원인 확인하기</a>")
+            self.source_notice.show()
         try:
             structure = job.structure().load()
             self.structure_info.setText("목차 구성: " + (f"{len(structure['nodes'])}개 · " + ("승인됨" if structure["status"] == "approved" else "초안 · 승인 필요") if structure else "자동 제작 시 사전 진단을 통과한 목차를 사용합니다."))
@@ -751,8 +832,8 @@ class MainWindow(QMainWindow):
             counts[block.kind] = counts.get(block.kind, 0) + 1
         image_count = sum(len(block.assets) for block in master.blocks)
         links = sum(len(block.links) for block in master.blocks)
-        self.analysis_info.setText(f"✓ 원고 준비 완료 · 본문 {counts.get('paragraph', 0)} · 이미지 {image_count} · 코드 {counts.get('code-block', 0)} · 표 {counts.get('table', 0)} · 링크 {links}")
-        self.status.setText("원고 준비 완료 · AI 교정을 시작하거나 결과물을 제작하세요.")
+        self.analysis_info.setText(f"✓ 원고 준비 완료 · 본문 문단 {counts.get('paragraph', 0)}개 · 이미지 {image_count} · 코드 {counts.get('code-block', 0)} · 표 {counts.get('table', 0)} · 링크 {links}")
+        self.status.setText("원고 준비 완료 · 제작 설정을 확인하고 ‘교재 만들기’를 누르세요.")
         self.load_suggestions()
         self.update_scope()
         previous = job.last_result()
@@ -973,6 +1054,7 @@ class MainWindow(QMainWindow):
         automatic_models = {role: (box.currentData(), self._effort(role)) for role, box in self.model_boxes.items()}
         learning = run_ai and self.learning_ai.isChecked()
         editorial_ai = run_ai and self.editorial_ai.isChecked()
+        request_lines = []
         if run_ai:
             from core.ai.automatic import plan
             try:
@@ -980,15 +1062,21 @@ class MainWindow(QMainWindow):
             except (ValueError, OSError) as exc:
                 QMessageBox.warning(self, '자동 출판 준비 실패', str(exc))
                 return
-            models_text = '\n'.join(label + ': ' + str(automatic_models[role][0]) for role,label,_ in ROLES)
-            if QMessageBox.question(self, '자동 출판 API 비용 안내',
-                f'자동 수정 대상 {len(eligible)}문단 · 최대 {len(eligible)*3}회 요청\n'
-                '교정 → 기술 검토 → 변경 문단 재검사 순서로 실행합니다. 저장된 응답은 재사용합니다.\n'
-                '추가 API 비용이 발생하며, 실제 금액은 원고 길이·모델·응답량에 따라 달라집니다.\n'
-                '선택한 AI 목차 구성 요청은 별도입니다.\n'
-                + ('학습 보완: 부족한 절·장마다 생성과 검수 각 1회. 본문·코드를 읽기 전용 근거로 전송합니다.\n' if learning else '')
-                + ('독립 텍스트 QA: 최종 후보 약 16,000자 묶음마다 1회 추가 요청합니다.\n' if editorial_ai else '')
-                + '\n'+models_text+'\n\n자동 출판을 시작할까요?') != QMessageBox.Yes:
+            request_lines.append(f'문장 교정: 대상 {len(eligible)}문단 · 최대 {len(eligible)*3}회 요청\n'
+                                 '교정 → 기술 검토 → 변경 문장 재검사 후 반영합니다.')
+        if depth_mode:
+            request_lines.append(f'소제목 자동 보완: 절별로 분석하여 최대 {max_depth}단계 제목까지 추가합니다. 목차 AI 요청은 별도입니다.')
+        if allow_restructure:
+            request_lines.append('새 목차 구성: 기본 목차가 부족할 때 AI에 제목 구성을 요청합니다.')
+        if learning:
+            request_lines.append('학습 문제 추가: 부족한 절·장마다 생성과 검수 각 1회. 본문·코드를 읽기 전용 근거로 전송합니다.')
+        if editorial_ai:
+            request_lines.append('문장 최종 검사: 최종 후보 약 16,000자 묶음마다 1회 요청합니다.')
+        if request_lines:
+            models_text = '\n'.join(label + ': ' + str(automatic_models[role][0]) for role,label,_ in ROLES) if run_ai else '목차 분석 모델: ' + str(structure_model)
+            if QMessageBox.question(self, 'AI 사용 범위와 비용 확인',
+                '\n\n'.join(request_lines) + '\n\n저장된 응답은 재사용합니다. API 비용은 원고 길이·모델·응답량에 따라 달라집니다.\n'
+                + models_text + '\n\n이 설정으로 교재를 만들까요?') != QMessageBox.Yes:
                 return
         self.is_reviewing = run_ai or allow_restructure or depth_mode
         self.is_building = True
@@ -1002,7 +1090,7 @@ class MainWindow(QMainWindow):
                     depth_mode=depth_mode, max_depth=max_depth, quick=False,
                     automatic_models=automatic_models if run_ai else None, learning=learning, editorial_ai=editorial_ai)
             return job.build(formats, chosen, emit, quick=False, theme=theme, cancelled=cancelled)
-        self.run_task("자동 출판 준비 중", produce, self._build_done, self._phase_progress)
+        self.run_task("교재 제작 준비 중", produce, self._build_done, self._phase_progress)
 
     def _build_done(self, result):
         self.is_reviewing = False
@@ -1029,10 +1117,9 @@ class MainWindow(QMainWindow):
             if q.get('policy', '').startswith('automatic-publication'):
                 summary = f"기존 승인 {q['manual_approved_count']}문단 유지 · 자동 수정 {q['applied_count']}건 · 확인 필요 {q['retained_count']}건 · 보호/사용자 제외 {q['protected_count']}문단"
                 self.result_info.setText(self.result_info.text() + '\n' + summary)
-                self.status.setText(self.status.text() + ' · ' + summary)
             else:
                 self.result_info.setText(self.result_info.text() + f"\n제한 교정 {q['applied_count']}건 적용 · 미검토 제안 {q['retained_count']}건 미적용")
-        self.changes_button.setEnabled((self.last_output_folder / 'reports/quick-changes.html').is_file())
+        self._fit_result_info()
         self.update_buttons()
 
     def show_editorial_report(self):
@@ -1065,14 +1152,24 @@ class MainWindow(QMainWindow):
     def show_preflight(self):
         job = self.production()
         if job:
-            from app.controllers.publishing import preflight
+            from app.controllers.publishing import preflight, diagnostic_summary
             try:
                 report = preflight(job)
-                text = "자동 제작 가능" if report['passed'] else "원고 보완 필요"
-                text += f"\n목차 후보 {len(report['nodes'])}개\n"
-                text += "\n".join(i['block_id'] + ' · ' + i['message'] for i in report['issues'])
-                text += "\n\n" + report['note']
-                QMessageBox.information(self, "원고 사전 진단", text)
+                dialog = QMessageBox(self)
+                dialog.setWindowTitle('원고 사전 진단')
+                dialog.setIcon(QMessageBox.Information)
+                dialog.setText(diagnostic_summary(report))
+                dialog.setInformativeText(f"목차 후보 {len(report['nodes'])}개\n" + report['note'])
+                if report['issues']:
+                    dialog.setDetailedText('\n'.join(i['block_id'] + ' · ' + i['message'] for i in report['issues']))
+                open_report = dialog.addButton('전체 보고서 열기', QMessageBox.ActionRole)
+                dialog.addButton('닫기', QMessageBox.RejectRole)
+                for button in dialog.buttons():
+                    if button.text() == 'Show Details...':
+                        button.setText('상세 항목 보기')
+                dialog.exec()
+                if dialog.clickedButton() is open_report:
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(job.work / 'preflight.html')))
             except (ValueError, OSError) as exc:
                 QMessageBox.warning(self, "사전 진단", str(exc))
 
@@ -1103,7 +1200,10 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("AI 모델 비교")
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("대표 문단에 사용할 모델을 선택하세요. 최고 정밀 모델은 기본 선택되지 않습니다."))
+        count = int(self.config.get("max_comparison_samples", 5))
+        note = QLabel(f"같은 원고에서 교정 가능한 앞부분 최대 {count}개 문단을 선택한 모델들이 각각 교정합니다. API 비용이 발생하며, 비교 제안은 원고에 자동 적용되지 않습니다.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
         choices = []
         for model in self.config["models"]:
             if not model.get("enabled", True):

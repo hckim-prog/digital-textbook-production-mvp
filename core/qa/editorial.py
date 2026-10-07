@@ -13,15 +13,34 @@ TECHNICAL = re.compile(r'Visual\s*Studio|단축키|signed|unsigned|overflow|unde
 
 def text_units(master):
     """Include captions and prose cells; code/output/math are read-protected."""
+    def table_units(table_id, rows, kinds, rich):
+        for ri, row in enumerate(rows):
+            for ci, value in enumerate(row):
+                kind = kinds[ri][ci] if ri < len(kinds) and ci < len(kinds[ri]) else 'paragraph'
+                if kind in {'code-block', 'code-output', 'math-expression'}:
+                    continue
+                items = rich[ri][ci] if ri < len(rich) and ci < len(rich[ri]) else []
+                cell_id = f'{table_id}-r{ri}c{ci}'
+                if not any(i['kind'] == 'table' for i in items):
+                    if value.strip():
+                        yield {'id': cell_id, 'text': value, 'kind': kind}
+                    continue
+                buffer, part = [], 0
+                for item in items + [{'kind': 'table-end'}]:
+                    if item['kind'] in {'table', 'table-end'}:
+                        text = ''.join(buffer)
+                        if text.strip():
+                            yield {'id': f'{cell_id}-p{part}', 'text': text, 'kind': kind}
+                        buffer.clear(); part += 1
+                        if item['kind'] == 'table':
+                            yield from table_units(item['id'], item['rows'], item['cell_kinds'], item['rich_cells'])
+                    elif item['kind'] != 'math':
+                        buffer.append(item.get('text', ''))
     for b in master.blocks:
         if b.kind in {'code-block', 'code-output', 'math-expression'}:
             continue
         if b.kind == 'table':
-            for ri, row in enumerate(b.rows):
-                for ci, value in enumerate(row):
-                    kind = b.cell_kinds[ri][ci] if ri < len(b.cell_kinds) and ci < len(b.cell_kinds[ri]) else 'paragraph'
-                    if kind not in {'code-block', 'code-output', 'math-expression'} and value.strip():
-                        yield {'id': f'{b.id}-r{ri}c{ci}', 'text': value, 'kind': kind}
+            yield from table_units(b.id, b.rows, b.cell_kinds, b.rich_cells)
         elif b.text.strip():
             yield {'id': b.id, 'text': b.text, 'kind': b.kind}
 

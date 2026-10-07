@@ -17,15 +17,20 @@ from core.master import Master
 
 def _master_codes(master: Master) -> list[tuple[str, str]]:
     result = []
+    def cells(table_id, rows, kinds, rich):
+        for ri, row in enumerate(rows):
+            for ci, value in enumerate(row):
+                if ri < len(kinds) and ci < len(kinds[ri]) and kinds[ri][ci] == 'code-block':
+                    result.append((f'{table_id}-r{ri}c{ci}', value))
+                elif ri < len(rich) and ci < len(rich[ri]):
+                    for item in rich[ri][ci]:
+                        if item['kind'] == 'table':
+                            cells(item['id'], item['rows'], item['cell_kinds'], item['rich_cells'])
     for block in master.blocks:
         if block.kind == "code-block":
             result.append((block.id, block.text))
         elif block.kind == "table":
-            for ri, row in enumerate(block.rows):
-                for ci, value in enumerate(row):
-                    if (ri < len(block.cell_kinds) and ci < len(block.cell_kinds[ri])
-                            and block.cell_kinds[ri][ci] == "code-block"):
-                        result.append((f"{block.id}-r{ri}c{ci}", value))
+            cells(block.id, block.rows, block.cell_kinds, block.rich_cells)
     return result
 
 

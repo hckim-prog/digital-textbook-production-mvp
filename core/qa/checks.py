@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from hashlib import sha256, md5
+from hashlib import sha256
 from html import escape
 from pathlib import Path
 import json
@@ -11,12 +11,11 @@ from zipfile import ZipFile
 from docx import Document
 from docx.oxml.ns import qn
 from lxml import html
-from PIL import Image
 import pymupdf
 
 from core.master import Master, file_hash
 from core.manuscript.code_blocks import paragraph_text, scan_code_sources
-from core.manuscript.content import MATH
+from core.manuscript.content import MATH, walk_inlines, table_parts
 from core.manuscript.structure import validate
 from core.qa.pdf_tables import read_tables, table_marker
 
@@ -31,12 +30,20 @@ def block_text(block):
 
 
 def image_digest(path):
-    with Image.open(path) as picture:
-        return md5(picture.convert("RGB").tobytes()).digest()
+    # Use the same decoder for the source and rendered PDF. JPEG decoders
+    # can differ by a pixel value even when compressed bytes are unchanged.
+    picture = pymupdf.Pixmap(str(path))
+    if picture.colorspace and picture.colorspace.n != 3:
+        picture = pymupdf.Pixmap(pymupdf.csRGB, picture)
+    if picture.alpha:
+        picture = pymupdf.Pixmap(picture, 0)
+    return picture.digest
 
 
 def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], original_master=None) -> dict:
     counts = Counter(b.kind for b in master.blocks)
+    tables = [part for b in master.blocks if b.kind == 'table'
+              for part in table_parts(b.id, b.rows, b.cell_kinds, b.rich_cells)]
     names = [name for block in master.blocks for name in block.assets]
     missing = [name for name in names if not (assets / name).is_file()]
     original_ok = source.is_file() and file_hash(source) == master.source_hash
@@ -55,7 +62,7 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
         word_text = []
         for block in (original_master or master).blocks:
             if block.kind == "table" and block.rich_cells:
-                inline = [item for row in block.rich_cells for cell in row for item in cell]
+                inline = walk_inlines(item for row in block.rich_cells for cell in row for item in cell)
                 word_text.append("".join(i.get("text", "") for i in inline if i["kind"] != "math"))
             elif block.inlines:
                 word_text.append("".join(i.get("text", "") for i in block.inlines if i["kind"] != "math"))
@@ -71,12 +78,12 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
         actual_images = [file_hash(assets / name) for name in names if (assets / name).is_file()]
         add("원고", "이미지 개수와 순서", source_images == actual_images, f"원본 {len(source_images)} / 준비 {len(actual_images)}")
         code_table_count = sum(item.table_cell is None and list(doc.element.body)[item.body_start - 1].tag == qn("w:tbl") for item in scan_code_sources(doc))
-        table_count = sum(child.tag == qn("w:tbl") for child in doc.element.body) - code_table_count
-        add("원고", "표 구조", table_count == counts.get("table", 0), f"{table_count}개 (코드 전용 표는 코드 블록으로 보존)")
+        table_count = len(doc.element.body.findall('.//' + qn('w:tbl'))) - code_table_count
+        add("원고", "표 구조", table_count == len(tables), f"{table_count}개 (표 안의 표 포함 · 코드 전용 표는 코드 블록으로 보존)")
         source_links = {str(doc.part.rels[node.get(qn("r:id"))].target_ref) for node in doc.element.body.findall(".//" + qn("w:hyperlink")) if node.get(qn("r:id")) in doc.part.rels}
         add("원고", "링크 주소", source_links <= {link for b in master.blocks for link in b.links})
         source_math = len(doc.element.body.findall(f".//{{{MATH}}}oMath"))
-        inline = [i for b in master.blocks for i in b.inlines] + [i for b in master.blocks for row in b.rich_cells for cell in row for i in cell]
+        inline = walk_inlines([i for b in master.blocks for i in b.inlines] + [i for b in master.blocks for row in b.rich_cells for cell in row for i in cell])
         actual_math = sum(i["kind"] == "math" for i in inline)
         add("원고", "수식 보존", source_math == actual_math, f"{source_math}개" + (" · 선형 표기 검토 필요" if source_math else ""))
     expected_links = {link for b in master.blocks for link in b.links if link.startswith(("http://", "https://", "mailto:"))}
@@ -121,7 +128,16 @@ def check(master: Master, source: Path, assets: Path, outputs: dict[str, Path], 
                 add(label, "본문·표·숫자·수식 내용", not missing_text, ", ".join(missing_text))
                 actual = [node.get("src", "").split("/")[-1] for node in tree.xpath("//img")]
                 add(label, "이미지 개수·순서·파일", actual == names and all(sha256(read_asset(name)).hexdigest() == file_hash(assets / name) for name in names), f"{len(actual)}개")
-                add(label, "표 개수", len(tree.xpath("//table")) == counts.get("table", 0))
+                actual_tables = tree.xpath('//table')
+                add(label, "표 개수", len(actual_tables) == len(tables))
+                expected_grid = [(table_id, [len(row) for row in rows],
+                                  [compact(value) for row in rows for value in row])
+                                 for table_id, rows, _, _ in tables]
+                actual_grid = [(node.get('data-table-id'),
+                                [len(row.xpath('./td')) for row in node.xpath('./tr|./tbody/tr')],
+                                [compact(cell.text_content()) for row in node.xpath('./tr|./tbody/tr') for cell in row.xpath('./td')])
+                               for node in actual_tables]
+                add(label, '표·내부 표의 행·열·셀 내용', expected_grid == actual_grid)
                 add(label, "링크", expected_links <= {n.get("href") for n in tree.xpath("//a")}, f"{len(expected_links)}개 주소")
                 add(label, "설명·이미지·캡션 연결", [node.get("data-group", "") for node in sections] == [b.group for b in master.blocks])
             elif kind == "pdf":

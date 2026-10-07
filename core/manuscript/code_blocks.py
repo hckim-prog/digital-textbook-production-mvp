@@ -15,7 +15,7 @@ class CodeSource:
     text: str
     body_start: int
     body_end: int
-    table_cell: tuple[int, int] | None = None
+    table_cell: tuple[int, ...] | None = None
 
 
 def paragraph_text(element) -> str:
@@ -65,23 +65,26 @@ def is_code_cell(text: str) -> bool:
 def scan_code_sources(doc) -> list[CodeSource]:
     children = list(doc.element.body.iterchildren())
     sources: list[CodeSource] = []
+    def scan_table(table, table_id, body_index, path=(), top=False):
+        for ri, row in enumerate(table.rows):
+            for ci, cell in enumerate(row.cells):
+                nested = [child for child in cell._tc if child.tag == qn('w:tbl')]
+                text = cell_text(cell)
+                cell_id = f'{table_id}-r{ri}c{ci}'
+                if not nested and is_code_cell(text):
+                    multiline = len([line for line in text.split('\n') if line.strip()]) >= 2
+                    single = top and len(table.rows) == 1 and len(row.cells) == 1 and multiline
+                    sources.append(CodeSource(table_id if single else cell_id, text,
+                                              body_index, body_index, None if single else (*path, ri, ci)))
+                for ti, child in enumerate(nested):
+                    scan_table(Table(child, doc), f'{cell_id}-t{ti}', body_index, (*path, ri, ci, ti))
     index = 0
     while index < len(children):
         child = children[index]
         body_index = index + 1
         if child.tag == qn("w:tbl"):
             table = Table(child, doc)
-            for row_index, row in enumerate(table.rows):
-                for col_index, cell in enumerate(row.cells):
-                    text = cell_text(cell)
-                    if is_code_cell(text):
-                        # Keep one-line examples as table cells, matching existing
-                        # saved masters and review baselines (bNNNNN-r0c0).
-                        multiline = len([line for line in text.split('\n') if line.strip()]) >= 2
-                        single = len(table.rows) == 1 and len(row.cells) == 1 and multiline
-                        block_id = f"b{body_index:05d}" if single else f"b{body_index:05d}-r{row_index}c{col_index}"
-                        sources.append(CodeSource(block_id, text, body_index, body_index,
-                                                  None if single else (row_index, col_index)))
+            scan_table(table, f'b{body_index:05d}', body_index, top=True)
             index += 1
             continue
         if child.tag != qn("w:p") or not is_code_paragraph(paragraph_text(child)):
